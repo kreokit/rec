@@ -1,0 +1,66 @@
+name: Bug report
+description: Something doesn't work, crashes or looks wrong.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing KreoKit Rec! A few details help a lot. Please don't attach recordings that show anything private.
+  - type: dropdown
+    id: system
+    attributes:
+      label: System
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: System version
+      placeholder: e.g. macOS 12.7, Windows 11 23H2, Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: computer
+    attributes:
+      label: Computer
+      description: Model, processor and memory, if you know them.
+      placeholder: e.g. MacBook Pro 2016, Intel Core i5, 16 GB
+  - type: input
+    id: version
+    attributes:
+      label: KreoKit Rec version
+      placeholder: e.g. 0.1.0-alpha
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What went wrong, and any error message shown.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Record the full screen + built-in microphone at 1080p30
+        2. Pause after 2 minutes, resume, stop after 10 minutes
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or screen recording
+      description: Drag screenshots into this box. If a recording goes wrong, say how long it was, what you recorded (screen, window, camera, microphone, computer sound) and the quality setting instead of attaching it.
