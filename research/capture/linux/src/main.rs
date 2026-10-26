@@ -42,7 +42,7 @@ async fn open_portal() -> ashpd::Result<(u32, Option<(i32, i32)>, std::os::fd::O
             &session,
             SelectSourcesOptions::default()
                 .set_cursor_mode(CursorMode::Embedded)
-                .set_sources(SourceType::Monitor)
+                .set_sources(ashpd::enumflags2::BitFlags::from(SourceType::Monitor))
                 .set_multiple(false)
                 .set_persist_mode(PersistMode::DoNot),
         )

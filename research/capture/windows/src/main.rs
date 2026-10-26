@@ -194,20 +194,27 @@ mod win {
     }
 
     pub fn wgc(seconds: f64, readback: bool) {
-        let monitor = Monitor::primary().expect("no primary monitor");
-        let settings = Settings::new(
-            monitor,
-            CursorCaptureSettings::WithCursor,
-            DrawBorderSettings::WithoutBorder,
-            SecondaryWindowSettings::Default,
-            // Ask for up to 60 updates per second; the system still sends only changes.
+        // Ask for up to 60 updates per second (the system still sends only changes). Older
+        // Windows can't set the interval: then run with the system's default.
+        for interval in [
             MinimumUpdateIntervalSettings::Custom(std::time::Duration::from_millis(16)),
-            DirtyRegionSettings::Default,
-            ColorFormat::Bgra8,
-            (seconds, readback),
-        );
-        if let Err(e) = Wgc::start(settings) {
-            println!("{{\"api\": \"wgc\", \"error\": {:?}}}", e.to_string());
+            MinimumUpdateIntervalSettings::Default,
+        ] {
+            let custom = matches!(interval, MinimumUpdateIntervalSettings::Custom(_));
+            let settings = Settings::new(
+                Monitor::primary().expect("no primary monitor"),
+                CursorCaptureSettings::WithCursor,
+                DrawBorderSettings::WithoutBorder,
+                SecondaryWindowSettings::Default,
+                interval,
+                DirtyRegionSettings::Default,
+                ColorFormat::Bgra8,
+                (seconds, readback),
+            );
+            match Wgc::start(settings) {
+                Ok(()) => return,
+                Err(e) => println!("{{\"api\": \"wgc\", \"custom_interval\": {custom}, \"error\": {:?}}}", e.to_string()),
+            }
         }
     }
 
