@@ -1,8 +1,12 @@
+mod awake;
 #[cfg(feature = "bench")]
 mod bench;
+mod check;
+mod disk;
 mod ffmpeg;
 mod native;
 mod probe;
+mod sessions;
 mod testpattern;
 
 use tauri::AppHandle;

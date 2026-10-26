@@ -222,9 +222,15 @@ mod tests {
         let report = analyze(&dir).unwrap();
         assert_eq!(report["file"]["stale"], 0, "{report}");
         assert_eq!(report["file"]["fresh_percent"], 100.0, "{report}");
-        assert!(report["file"]["unchanged"].as_u64().unwrap() >= 55, "{report}");
+        assert!(
+            report["file"]["unchanged"].as_u64().unwrap() >= 55,
+            "{report}"
+        );
         // Every kept frame is the newest: its age varies by less than one capture frame.
-        assert!(report["pattern_age_ms"]["max"].as_f64().unwrap() < 17.0, "{report}");
+        assert!(
+            report["pattern_age_ms"]["max"].as_f64().unwrap() < 17.0,
+            "{report}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
