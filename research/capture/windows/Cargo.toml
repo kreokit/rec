@@ -1,0 +1,16 @@
+[package]
+name = "wincap"
+version = "0.0.0"
+description = "M1 capture research: Windows.Graphics.Capture, DXGI duplication and WASAPI loopback frame/sample delivery"
+license = "MIT OR Apache-2.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+cpal = "0.18.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-capture = "2.0.1"
+
+[profile.release]
+opt-level = 3

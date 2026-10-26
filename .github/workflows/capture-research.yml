@@ -1,0 +1,126 @@
+# Milestone 1 capture research (docs/capture-research.md): measures the screen and audio
+# capture options on CI runners. Each job writes its findings to the job summary and
+# uploads results/ as an artifact. Not part of the app's tests.
+name: Capture research
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "research/capture/**"
+      - ".github/workflows/capture-research.yml"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: research/capture/windows
+      - name: Our LGPL FFmpeg build
+        run: python research/capture/fetch_ffmpeg_lgpl.py win64 ffmpeg-lgpl
+      - name: Build wincap
+        working-directory: research/capture/windows
+        run: cargo build --release
+      - name: Measure
+        shell: pwsh
+        run: ./research/capture/windows/run.ps1 -Wincap research/capture/windows/target/release/wincap.exe -FFmpegDir ffmpeg-lgpl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capture-research-${{ matrix.os }}
+          path: results/
+
+  linux-x11:
+    name: Linux X11 (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xvfb, and FFmpeg for the moving picture
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb ffmpeg time
+      - name: Our LGPL FFmpeg build
+        run: python3 research/capture/fetch_ffmpeg_lgpl.py linux64 ffmpeg-lgpl
+      - name: Measure
+        run: research/capture/linux/x11.sh ffmpeg-lgpl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capture-research-linux-x11
+          path: results/
+
+  linux-wayland:
+    name: Linux Wayland portal (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Headless sway, PipeWire, portals; build tools for lincap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sway xdg-desktop-portal xdg-desktop-portal-wlr \
+            pipewire wireplumber pipewire-pulse pulseaudio-utils dbus-x11 ffmpeg time \
+            libpipewire-0.3-dev libclang-dev clang pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: research/capture/linux
+      - name: Build lincap
+        working-directory: research/capture/linux
+        run: cargo build --release
+      - name: Measure
+        run: dbus-run-session -- research/capture/linux/wayland.sh research/capture/linux/target/release/lincap
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capture-research-linux-wayland
+          path: results/
+
+  macos:
+    name: macOS synthetic (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: FFmpeg for the analysis
+        run: brew install ffmpeg
+      - name: Build capbench (newer SDK, macOS 12 minimum, as a release build would)
+        run: |
+          clang -fobjc-arc -O2 -mmacosx-version-min=12.0 research/capture/macos/capbench.m -o capbench \
+            -framework Foundation -framework AVFoundation -framework CoreMedia \
+            -framework CoreVideo -framework VideoToolbox
+          otool -l capbench | grep -A4 LC_BUILD_VERSION
+      - name: Measure (30 s screen 1728x1080 + camera 720p + mic, then a kill -9 test)
+        run: |
+          mkdir -p results
+          ./capbench --out results/run --seconds 30 --camera 1280x720 --mic --keyframe 1 | tee results/run.json
+          python3 -I research/capture/analyze.py results/run | tee results/run.analysis.json
+          ./capbench --out results/crash --seconds 60 --camera 1280x720 --mic --keyframe 1 > /dev/null & P=$!
+          sleep 20; kill -9 $P; wait $P || true
+          python3 -I research/capture/analyze.py results/crash | tee results/crash.analysis.json
+          { echo "## macOS synthetic (${{ matrix.os }})"; echo '```'; cat results/run.json; echo '```';
+            echo '```'; python3 -c "import json;r=json.load(open('results/run.analysis.json'));print(json.dumps([{k:v[k] for k in ('file','frames','missing_frames','repeated_frames','sync_drift_ms')} for v in r['videos']]))";
+            python3 -c "import json;print(json.load(open('results/crash.analysis.json')).get('crash'))"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          rm -f results/*/*.mp4
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capture-research-${{ matrix.os }}
+          path: results/

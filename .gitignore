@@ -35,3 +35,7 @@ src-tauri/binaries/FFMPEG-LICENSE.txt
 
 # Python bytecode
 __pycache__/
+
+# Capture research prototypes
+research/**/target/
+research/**/Cargo.lock
