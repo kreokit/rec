@@ -13,6 +13,9 @@
 // and sync marker of capbench, driven by the host clock; analyze.py reads it back from the
 // recording (pattern.json gives its position). --beep plays a 5 ms click through the
 // speakers on every marker, so the mic recording measures A/V sync end to end.
+// --hide-pattern asks the system to keep that window out of the capture (sharingType none,
+// and for ScreenCaptureKit also the content filter): if it works, the counter is missing
+// from the recording. That is how KreoKit's own windows would be excluded (M5).
 //
 // Built as an app bundle (make-capreal-app.sh) so macOS asks for permission for capreal
 // itself rather than for the editor or terminal that starts it.
@@ -201,7 +204,7 @@ int main(int argc, const char *argv[]) {
         NSString *out = nil, *screenMode = @"none";
         double seconds = 10, fragment = 1.0;
         int sw = 1728, sh = 1080;
-        BOOL camera = NO, mic = NO, beep = NO, pattern = YES;
+        BOOL camera = NO, mic = NO, beep = NO, pattern = YES, hidePattern = NO;
         for (int i = 1; i < argc; i++) {
             const char *a = argv[i];
             const char *v = i + 1 < argc ? argv[i + 1] : "";
@@ -216,6 +219,7 @@ int main(int argc, const char *argv[]) {
             else if (!strcmp(a, "--mic")) mic = YES;
             else if (!strcmp(a, "--beep")) beep = YES;
             else if (!strcmp(a, "--no-pattern")) pattern = NO;
+            else if (!strcmp(a, "--hide-pattern")) hidePattern = YES;
             else if (!strncmp(a, "-psn_", 5)) continue; // added by Launch Services
             else {
                 fprintf(stderr, "unknown option %s\n", a);
@@ -223,7 +227,7 @@ int main(int argc, const char *argv[]) {
             }
         }
         if (!out) {
-            fprintf(stderr, "usage: capreal --out DIR [--seconds N] [--screen sck|avf|cgd|none] [--size WxH] [--fps N] [--camera] [--mic] [--beep] [--no-pattern]\n");
+            fprintf(stderr, "usage: capreal --out DIR [--seconds N] [--screen sck|avf|cgd|none] [--size WxH] [--fps N] [--camera] [--mic] [--beep] [--no-pattern] [--hide-pattern]\n");
             return 2;
         }
         [[NSFileManager defaultManager] createDirectoryAtPath:out withIntermediateDirectories:YES attributes:nil error:nil];
@@ -248,6 +252,7 @@ int main(int argc, const char *argv[]) {
             NSRect frame = NSMakeRect(vis.origin.x + 40, NSMaxY(vis) - 40 - cellPt * 4, cellPt * kPatternCells, cellPt * 4);
             window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
             window.level = NSStatusWindowLevel;
+            if (hidePattern) window.sharingType = NSWindowSharingNone;
             view = [[PatternView alloc] initWithFrame:NSMakeRect(0, 0, frame.size.width, frame.size.height)];
             window.contentView = view;
             [window orderFrontRegardless];
@@ -401,7 +406,12 @@ int main(int argc, const char *argv[]) {
                             err ? err.localizedDescription.UTF8String : "permission?");
                     return 1;
                 }
-                SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+                NSMutableArray<SCWindow *> *excluded = [NSMutableArray array];
+                if (hidePattern)
+                    for (SCWindow *w in content.windows)
+                        if (w.windowID == (CGWindowID)window.windowNumber) [excluded addObject:w];
+                report[@"excluded_windows"] = [NSString stringWithFormat:@"%lu", (unsigned long)excluded.count];
+                SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:excluded];
                 SCStreamConfiguration *cfg = [SCStreamConfiguration new];
                 cfg.width = (size_t)sw;
                 cfg.height = (size_t)sh;

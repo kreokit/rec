@@ -105,6 +105,9 @@ def analyze_video(path: Path, fps: int, pattern: dict | None = None) -> dict:
         "missing_frames": gaps,
         "missing_runs": missing_runs[:10],
         "repeated_frames": repeats,
+        # Random screen content decodes to a random 32-bit number; a visible counter stays
+        # small. ~0 here means the pattern window was kept out of the capture.
+        "pattern_visible_fraction": round(sum(1 for n in counters if n < 100_000) / len(counters), 4),
         "pts_vs_counter_max_error_ms": round(1000 * max(timing_err), 3),
         "markers": [(p, n) for p, n, m in frames if m],
     }
