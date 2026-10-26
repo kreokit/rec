@@ -13,6 +13,12 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  DEBIAN_FRONTEND: noninteractive
+
+# A newer push makes an older research run pointless.
+concurrency:
+  group: capture-research-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   windows:
@@ -21,6 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
+    timeout-minutes: 40
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -47,13 +54,14 @@ jobs:
 
   linux-x11:
     name: Linux X11 (ubuntu-24.04)
+    timeout-minutes: 40
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Xvfb, and FFmpeg for the moving picture
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb ffmpeg time
+          sudo apt-get install -y --no-install-recommends xvfb ffmpeg time
       - name: Our LGPL FFmpeg build
         run: python3 research/capture/fetch_ffmpeg_lgpl.py linux64 ffmpeg-lgpl
       - name: Measure
@@ -66,13 +74,14 @@ jobs:
 
   linux-wayland:
     name: Linux Wayland portal (ubuntu-24.04)
+    timeout-minutes: 40
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Headless sway, PipeWire, portals; build tools for lincap
         run: |
           sudo apt-get update
-          sudo apt-get install -y sway xdg-desktop-portal xdg-desktop-portal-wlr \
+          sudo apt-get install -y --no-install-recommends sway xdg-desktop-portal xdg-desktop-portal-wlr \
             pipewire wireplumber pipewire-pulse pulseaudio-utils dbus-x11 ffmpeg time \
             libpipewire-0.3-dev libclang-dev clang pkg-config
       - uses: dtolnay/rust-toolchain@stable
@@ -96,6 +105,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15, macos-15-intel]
+    timeout-minutes: 40
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
