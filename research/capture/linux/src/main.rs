@@ -1,8 +1,10 @@
 //! lincap: M1 capture research prototype for Linux (docs/capture-research.md).
 //!
 //!     lincap portal SECONDS   xdg-desktop-portal ScreenCast -> PipeWire video frames
-//!     lincap audio SECONDS    PulseAudio protocol (also served by pipewire-pulse):
-//!                             the default sink's monitor (computer sound) + default mic
+//!     lincap audio pulse SECONDS     PulseAudio protocol (also served by pipewire-pulse):
+//!                                    the default sink's monitor (computer sound) + default mic
+//!     lincap audio pipewire SECONDS  PipeWire: an input stream on the default output device
+//!                                    records what plays there (computer sound) + default mic
 //!
 //! Counts frames and samples without encoding and prints one JSON object per run. The
 //! portal stream, like the other systems' screen APIs, only sends frames when the screen
@@ -188,10 +190,11 @@ fn portal(seconds: f64) {
     mainloop.run();
 }
 
-/// Counts samples (and the peak level) from `device` for `seconds`.
+/// Counts samples (and the peak level) from `device` for `seconds`. An output device
+/// opened for input records what plays to it (PipeWire's capture-sink).
 fn count_samples(device: &cpal::Device, seconds: f64) -> String {
     let name = device.description().map(|d| d.name().to_string()).unwrap_or_default();
-    let config = match device.default_input_config() {
+    let config = match device.default_input_config().or_else(|_| device.default_output_config()) {
         Ok(c) => c,
         Err(e) => return format!("{{\"name\": {name:?}, \"error\": {:?}}}", e.to_string()),
     };
@@ -227,14 +230,21 @@ fn count_samples(device: &cpal::Device, seconds: f64) -> String {
     )
 }
 
-fn audio(seconds: f64) {
-    let host = match cpal::host_from_id(cpal::HostId::PulseAudio) {
+fn audio(api: &str, seconds: f64) {
+    let id = if api == "pipewire" { cpal::HostId::PipeWire } else { cpal::HostId::PulseAudio };
+    let host = match cpal::host_from_id(id) {
         Ok(h) => h,
         Err(e) => {
-            println!("{{\"api\": \"pulseaudio\", \"error\": {:?}}}", e.to_string());
+            println!("{{\"api\": \"{api}\", \"error\": {:?}}}", e.to_string());
             return;
         }
     };
+    if api == "pipewire" {
+        let out = host.default_output_device().map(|d| count_samples(&d, seconds)).unwrap_or("null".into());
+        let mic = host.default_input_device().map(|d| count_samples(&d, seconds)).unwrap_or("null".into());
+        println!("{{\"api\": \"pipewire\", \"seconds\": {seconds}, \"output_capture\": {out}, \"default_input\": {mic}}}");
+        return;
+    }
     let devices: Vec<cpal::Device> = host.devices().map(|d| d.collect()).unwrap_or_default();
     let names: Vec<String> = devices.iter().map(|d| d.description().map(|x| x.name().to_string()).unwrap_or_default()).collect();
     eprintln!("devices: {names:?}");
@@ -252,9 +262,13 @@ fn main() {
     let seconds = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10.0);
     match args.get(1).map(String::as_str) {
         Some("portal") => portal(seconds),
-        Some("audio") => audio(seconds),
+        Some("audio") => {
+            let api = args.get(2).cloned().unwrap_or_default();
+            let seconds = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10.0);
+            audio(&api, seconds)
+        }
         _ => {
-            eprintln!("usage: lincap portal SECONDS | audio SECONDS");
+            eprintln!("usage: lincap portal SECONDS | audio pulse|pipewire SECONDS");
             std::process::exit(2);
         }
     }

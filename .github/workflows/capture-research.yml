@@ -83,7 +83,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends sway xdg-desktop-portal xdg-desktop-portal-wlr \
             pipewire wireplumber pipewire-pulse pulseaudio-utils dbus-x11 ffmpeg time \
-            libpipewire-0.3-dev libasound2-dev libclang-dev clang pkg-config
+            libpipewire-0.3-dev libasound2-dev libclang-dev clang pkg-config \
+            libgl1-mesa-dri libegl1 libegl-mesa0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -126,7 +127,8 @@ jobs:
             grep -h -B4 "@interface AVCaptureScreenInput" -r "$SDK/System/Library/Frameworks/AVFoundation.framework/Headers/" | head -8 || true;
             grep -h -B1 -A1 "capturesAudio" "$SDK/System/Library/Frameworks/ScreenCaptureKit.framework/Headers/SCStream.h" | head -6 || true;
             echo "capreal build:"; grep -E "warning|error|built" results-capreal-build.txt | head -10;
-            otool -L capreal.app/Contents/MacOS/capreal | grep -i screencapture || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            otool -L capreal.app/Contents/MacOS/capreal | grep -i screencapture || true; echo '```'; } | tee sdk.md >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p results && mv sdk.md results-capreal-build.txt results/
       - name: Measure (30 s screen 1728x1080 + camera 720p + mic, then a kill -9 test)
         run: |
           mkdir -p results

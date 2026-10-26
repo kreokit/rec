@@ -30,7 +30,8 @@ pipewire > results/pipewire.log 2>&1 &
 sleep 1
 wireplumber > results/wireplumber.log 2>&1 &
 pipewire-pulse > results/pipewire-pulse.log 2>&1 &
-WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c "$XDG_CONFIG_HOME/sway/config" > results/sway.log 2>&1 &
+# GLES on Mesa's software renderer: wlr-screencopy found no usable format with pixman.
+WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=gles2 WLR_RENDERER_ALLOW_SOFTWARE=1 sway -c "$XDG_CONFIG_HOME/sway/config" > results/sway.log 2>&1 &
 for i in $(seq 1 20); do [ -S "$XDG_RUNTIME_DIR/wayland-1" ] && break; sleep 0.5; done
 export WAYLAND_DISPLAY=wayland-1 XDG_CURRENT_DESKTOP=sway XDG_SESSION_TYPE=wayland
 dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR XDG_CONFIG_HOME
@@ -48,11 +49,18 @@ read -r wall user sys < results/portal.time
 say "portal: $(cat results/portal.json) | cpu $(python3 -c "print(round(100*($user+$sys)/$wall,1))")% of one core"
 
 # Computer sound: play a tone into the default sink while lincap records its monitor.
-ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=12" -ac 2 -ar 48000 results/tone.wav
+ffmpeg -hide_banner -loglevel error -f lavfi -i "sine=frequency=440:duration=30" -ac 2 -ar 48000 results/tone.wav
 paplay results/tone.wav & TONE=$!
 sleep 0.5
-timeout 60 "$LINCAP" audio 10 > results/audio.json 2> results/audio.err.txt
-say "audio: $(cat results/audio.json)"
+# PulseAudio protocol without a cookie file (a fresh PipeWire-only system), then with
+# one (pipewire-pulse wants 256 bytes but never checks them), then native PipeWire.
+timeout 60 "$LINCAP" audio pulse 3 > results/audio-pulse-nocookie.json 2> results/audio-pulse-nocookie.err.txt
+say "audio (PulseAudio protocol, no cookie): $(cat results/audio-pulse-nocookie.json)"
+head -c 256 /dev/urandom > results/pulse-cookie
+PULSE_COOKIE="$PWD/results/pulse-cookie" timeout 60 "$LINCAP" audio pulse 3 > results/audio-pulse.json 2> results/audio-pulse.err.txt
+say "audio (PulseAudio protocol, with cookie): $(cat results/audio-pulse.json)"
+timeout 60 "$LINCAP" audio pipewire 3 > results/audio-pipewire.json 2> results/audio-pipewire.err.txt
+say "audio (PipeWire): $(cat results/audio-pipewire.json)"
 wait $TONE 2>/dev/null
 say '```'
 cat results/summary-wayland.md >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
