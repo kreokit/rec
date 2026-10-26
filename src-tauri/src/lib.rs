@@ -6,6 +6,7 @@ mod disk;
 mod ffmpeg;
 mod native;
 mod probe;
+mod recovery;
 mod sessions;
 mod testpattern;
 
