@@ -4,10 +4,9 @@ How KreoKit Rec captures the screen, camera, microphone and computer sound on ea
 decided by measurement. Prototypes, scripts and how to rerun them:
 [research/capture/](../research/capture/). CI runs: the "Capture research" workflow.
 
-**Status:** everything that can run without real devices is measured. The macOS 12
-comparison of the three screen APIs on the real screen, the real camera and mic, and
-window exclusion are prepared (`research/capture/macos/run-real.sh`) but **not run**: they
-record the user's real screen, camera and microphone and wait for the user's OK.
+**Status:** measured, including the macOS 12 real-device test (2026-10-26, with the
+user's OK). Still open: real camera timing (M3) and the end-to-end A/V offset through real
+hardware (M2).
 
 ## What a recorder needs
 
@@ -25,7 +24,7 @@ CLAUDE.md: never lose a recording, never drift out of sync, never drop frames. P
 | | Screen | Camera, mic | Computer sound | Encode + write |
 |---|---|---|---|---|
 | **macOS 13+** | ScreenCaptureKit | AVFoundation | ScreenCaptureKit audio | VideoToolbox via AVAssetWriter, fragmented MP4 |
-| **macOS 12** | to decide with the real-screen test: ScreenCaptureKit, CGDisplayStream or AVCaptureScreenInput | AVFoundation | "Needs macOS 13 or newer" | same |
+| **macOS 12** | CGDisplayStream (measured best; ScreenCaptureKit needs a workaround there) | AVFoundation | "Needs macOS 13 or newer" | same |
 | **Windows 10/11** | Windows.Graphics.Capture, DXGI duplication as fallback | Media Foundation (M3) | WASAPI loopback (cpal) | Media Foundation H.264 (M3) |
 | **Linux** | xdg-desktop-portal ScreenCast + PipeWire; x11grab on X11 without a portal | V4L2/PipeWire (M3) | PipeWire capture-sink (cpal); PulseAudio monitor as fallback | OpenH264 / VA-API in our LGPL FFmpeg |
 
@@ -108,18 +107,50 @@ one file per source, all stamped with the host clock from the same start instant
   identifier, `com.kreokit.rec.capreal-test`; the real app has its own anyway. On macOS 12,
   Screen Recording permission applies only after the app restarts (Permissions screen).
 
-**Waiting for the user's OK** (`run-real.sh`, ≈ 16 minutes in all):
+### Real devices on the dev Mac (2026-10-26, with the user's OK)
 
-1. `permissions` (3 s each): makes macOS ask for capreal's screen, camera and mic access.
-2. `screen` (60 s each): ScreenCaptureKit vs CGDisplayStream vs AVCaptureScreenInput at
-   1728×1080, 30 fps. A small window shows a frame counter from the host clock;
-   `analyze.py` reads it back, so every lost screen frame is counted.
-3. `exclude` (10 s each): can that window be kept out of the capture (M5)?
-4. `full` (10 min): the best screen API + camera 720p + mic, clicking through the speakers
-   once per second, so the mic measures A/V drift end to end through real hardware.
+macOS 12.7.6, built-in Retina display 2880×1800 px (1440×900 pt), captured at 1728×1080,
+30 fps, NV12. A small window showed a frame counter driven by the host clock; `analyze.py`
+read it back. All recordings were deleted after the analysis.
 
-The analysis reads only the counter's pixel rows and the click times; nothing is viewed or
-uploaded, and the recordings are deleted afterwards.
+| 60 s each | Frames (of 1800) | Gaps > 50 ms | Counter: missing / stale repeats | Own window kept out | CPU: ours / whole system |
+|---|---|---|---|---|---|
+| ScreenCaptureKit, empty exclusion list | **0** (3 of 3 runs) | – | – | – | 7 % / 15–29 % |
+| ScreenCaptureKit, one window excluded | 1746 | 68 | (counter hidden) | **yes** | 15.7 % / 22.4 % |
+| AVCaptureScreenInput | 1795 | 4 | 146 / **143** | no | 18.8 % / 22.7 % |
+| CGDisplayStream | 1764 | 51 | 38 / 3 | no | 14.7 % / 19.2 % |
+
+- **ScreenCaptureKit on macOS 12.7.6 delivers no frames unless the content filter excludes
+  at least one window.** The stream starts without error, and the system's capture service
+  (`replayd`) logs `frameCount=0` every 5 s; also without any window of ours on screen.
+  With one window excluded it works and keeps that window out. This fits OBS not using it
+  for displays on macOS 12.
+- AVCaptureScreenInput's timestamps are perfectly even, but 8 % of its frames repeat the
+  previous picture (and as many are skipped): motion judders although nothing is
+  "dropped".
+- CGDisplayStream gives the most fresh frames (97.8 %), the lowest latency and CPU. Its
+  ≈ 50 ms gaps are a 60 Hz display sampled at 30 fps (a frame one refresh late). M2 tries
+  asking for 60 fps and keeping one frame per 1/30 s slot.
+- Marking a window "not shareable" (`sharingType` none) does **not** hide it from
+  AVCaptureScreenInput or CGDisplayStream on macOS 12: KreoKit's own windows can only be
+  kept out on macOS 13+ (ScreenCaptureKit). M5 must hide or minimise them on macOS 12.
+- **10 minutes, CGDisplayStream + built-in mic:** screen 17590 / 18000 frames (97.7 %,
+  counter 653 missing / 244 repeated), 244 MB; mic 28 799 488 samples in 600 s: **the mic
+  clock runs within 0.1 ppm of the host clock** (no drift to correct). The speaker clicks
+  were too quiet to pick out of the room sound, so the end-to-end A/V offset through real
+  hardware is still to measure (M2 self-test / a clap test).
+- **Camera:** capreal crashed before recording. The FaceTime HD camera offers "30 fps" as
+  1000000/30000030 s and throws on an exact 1/30 s; use the format's own frame duration
+  (fixed in capreal; measured again in M3).
+
+### Decision for macOS 12 (proposed)
+
+**CGDisplayStream on macOS 12, ScreenCaptureKit on macOS 13+**, as OBS does. On 12 it
+delivered the most fresh frames at the lowest cost and has no start-up quirks; its only
+gaps are display-refresh timing. ScreenCaptureKit on 12 depends on an undocumented
+workaround (exclude a window) and loses more frames. CGDisplayStream is obsolete from
+macOS 15 SDK-wise, so it is used only when running on macOS 12 (weak-linked path, runtime
+check), never on newer systems.
 
 ## Windows
 
@@ -202,23 +233,21 @@ prototypes are not shipped.
 
 ## Open questions
 
-1. macOS 12: which screen API (real-screen test) and whether own-window exclusion works.
-2. The real mic's clock against the host clock over 10 minutes (drift the app must
-   correct by resampling or timestamping).
+1. End-to-end A/V offset through real hardware (the speaker clicks were too quiet).
+2. Camera frame timing (M3), with the frame-duration fix.
 3. Windows encoding path and real 1080p30/60 fps (needs a real PC).
 4. Wayland on real GNOME/KDE desktops (portal dialog, restore token) — friends' machines.
 
 ## Proposed M2 plan (screen + mic on macOS)
 
-Built only after the user has seen this and the macOS 12 real-device test has picked the
-screen API. Order = commit order; every commit builds and passes the tests on its own.
+Approved by the user (2026-10-26); starts once the user confirms the macOS 12 choice. Order = commit order; every commit builds and passes the tests on its own.
 
 1. **FFmpeg sidecars from Clips** (fetch, LGPL build, `verify_ffmpeg.py`, GPL-filter guard)
    and `probe`: needed to check and recover recordings. `check_macos_binary.py` also checks
    that ScreenCaptureKit is weak-linked.
 2. **Native recorder (Objective-C, `src-tauri/native/macos/`, built by `build.rs` with
-   `cc`)** behind a small C interface: screen source (ScreenCaptureKit on 13+, the measured
-   winner on 12), mic (AVCaptureSession, retimed to the host clock), one AVAssetWriter per
+   `cc`)** behind a small C interface: screen source (ScreenCaptureKit on 13+, CGDisplayStream
+   on 12; try 60 fps capture with one frame kept per 1/30 s slot), mic (AVCaptureSession, retimed to the host clock), one AVAssetWriter per
    track (H.264 High/BT.709 or AAC 48 kHz; fragmented MP4, keyframe and fragment every
    1 s), a ≈ 1 s queue in front of each writer, `fsync` every few seconds, overload
    detection, mic level, a synthetic source for tests (capbench's counter + clicks).

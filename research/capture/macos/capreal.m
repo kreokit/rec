@@ -183,14 +183,47 @@ static CMSampleBufferRef retimedToHost(CMSampleBufferRef sb, CMClockRef clock) {
 
 // ---------------------------------------------------------------------------------------
 
-static AVCaptureDeviceFormat *formatFor(AVCaptureDevice *d, int w, int h, int fps) {
+// The format and frame-rate range for w x h at fps. Use the range's own frame duration:
+// the MacBook's FaceTime HD camera offers "30.00" as 1000000/30000030 s and throws on an
+// exact 1/30 s (measured 2026-10-26).
+static AVCaptureDeviceFormat *formatFor(AVCaptureDevice *d, int w, int h, int fps, AVFrameRateRange **range) {
     for (AVCaptureDeviceFormat *f in d.formats) {
         CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription);
         if (dim.width != w || dim.height != h) continue;
         for (AVFrameRateRange *r in f.videoSupportedFrameRateRanges)
-            if (r.maxFrameRate >= fps - 0.01 && r.minFrameRate <= fps + 0.01) return f;
+            if (r.maxFrameRate >= fps - 0.01 && r.minFrameRate <= fps + 0.01) {
+                *range = r;
+                return f;
+            }
     }
     return nil;
+}
+
+static const char *authName(AVAuthorizationStatus s) {
+    switch (s) {
+    case AVAuthorizationStatusAuthorized: return "allowed";
+    case AVAuthorizationStatusDenied: return "denied";
+    case AVAuthorizationStatusRestricted: return "restricted";
+    default: return "not asked";
+    }
+}
+
+// --check prints what capreal may record; --request first asks for camera and mic (waiting
+// for the answers) and opens the screen-recording request (System Preferences on macOS 12).
+static int permissions(BOOL request) {
+    if (request) {
+        for (AVMediaType type in @[ AVMediaTypeVideo, AVMediaTypeAudio ]) {
+            if ([AVCaptureDevice authorizationStatusForMediaType:type] != AVAuthorizationStatusNotDetermined) continue;
+            dispatch_semaphore_t answered = dispatch_semaphore_create(0);
+            [AVCaptureDevice requestAccessForMediaType:type completionHandler:^(BOOL granted) { dispatch_semaphore_signal(answered); }];
+            dispatch_semaphore_wait(answered, DISPATCH_TIME_FOREVER);
+        }
+        if (!CGPreflightScreenCaptureAccess()) CGRequestScreenCaptureAccess();
+    }
+    printf("{\"screen\": \"%s\", \"camera\": \"%s\", \"mic\": \"%s\"}\n", CGPreflightScreenCaptureAccess() ? "allowed" : "not allowed",
+           authName([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]), authName([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio]));
+    fflush(stdout);
+    return 0;
 }
 
 static NSString *jsonString(NSString *s) {
@@ -220,6 +253,8 @@ int main(int argc, const char *argv[]) {
             else if (!strcmp(a, "--beep")) beep = YES;
             else if (!strcmp(a, "--no-pattern")) pattern = NO;
             else if (!strcmp(a, "--hide-pattern")) hidePattern = YES;
+            else if (!strcmp(a, "--check")) return permissions(NO);
+            else if (!strcmp(a, "--request")) return permissions(YES);
             else if (!strncmp(a, "-psn_", 5)) continue; // added by Launch Services
             else {
                 fprintf(stderr, "unknown option %s\n", a);
@@ -289,12 +324,15 @@ int main(int argc, const char *argv[]) {
                     return 1;
                 }
                 [rec.session addInput:input];
-                AVCaptureDeviceFormat *fmt = formatFor(dev, 1280, 720, gFps);
-                if ([dev lockForConfiguration:&e]) {
-                    if (fmt) dev.activeFormat = fmt;
-                    // A fixed frame rate: otherwise the camera may halve it in low light.
-                    dev.activeVideoMinFrameDuration = CMTimeMake(1, gFps);
-                    dev.activeVideoMaxFrameDuration = CMTimeMake(1, gFps);
+                AVFrameRateRange *range = nil;
+                AVCaptureDeviceFormat *fmt = formatFor(dev, 1280, 720, gFps, &range);
+                if (fmt && [dev lockForConfiguration:&e]) {
+                    dev.activeFormat = fmt;
+                    // A fixed frame rate: otherwise the camera may halve it in low light. A
+                    // range offering gFps exactly has min = max duration; else the fastest.
+                    CMTime duration = range.maxFrameRate - range.minFrameRate < 0.01 ? range.minFrameDuration : CMTimeMake(1, gFps);
+                    dev.activeVideoMinFrameDuration = duration;
+                    dev.activeVideoMaxFrameDuration = duration;
                     [dev unlockForConfiguration];
                 }
                 CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(dev.activeFormat.formatDescription);
