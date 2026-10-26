@@ -17,7 +17,7 @@ $summary = @("## Windows capture research ($env:RUNNER_OS, $((Get-CimInstance Wi
 function Note($text) { Write-Host $text; $script:summary += $text }
 
 # Runs a program, returns its output plus the CPU time it used (all its threads).
-function Measure($name, $exe, [string[]] $argList) {
+function Invoke-Run($name, $exe, [string[]] $argList) {
     $out = Join-Path $results "$name.out.txt"
     $err = Join-Path $results "$name.err.txt"
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -72,22 +72,22 @@ Note "### Runs"
 Note "| run | wall | CPU | exit |"
 Note "|---|---|---|---|"
 $runs = @{}
-$runs["wincap-list"] = (Measure "wincap-list" $Wincap @("list"))[0]
-$runs["wgc"] = (Measure "wgc" $Wincap @("wgc", "$Seconds"))[0]
-$runs["wgc-readback"] = (Measure "wgc-readback" $Wincap @("wgc", "$Seconds", "--readback"))[0]
-$runs["dxgi"] = (Measure "dxgi" $Wincap @("dxgi", "$Seconds"))[0]
-$runs["dxgi-readback"] = (Measure "dxgi-readback" $Wincap @("dxgi", "$Seconds", "--readback"))[0]
-$runs["audio"] = (Measure "wasapi" $Wincap @("audio", "10"))[0]
+$runs["wincap-list"] = (Invoke-Run "wincap-list" $Wincap @("list"))[0]
+$runs["wgc"] = (Invoke-Run "wgc" $Wincap @("wgc", "$Seconds"))[0]
+$runs["wgc-readback"] = (Invoke-Run "wgc-readback" $Wincap @("wgc", "$Seconds", "--readback"))[0]
+$runs["dxgi"] = (Invoke-Run "dxgi" $Wincap @("dxgi", "$Seconds"))[0]
+$runs["dxgi-readback"] = (Invoke-Run "dxgi-readback" $Wincap @("dxgi", "$Seconds", "--readback"))[0]
+$runs["audio"] = (Invoke-Run "wasapi" $Wincap @("audio", "10"))[0]
 
 # FFmpeg: capture only (decoded frames thrown away), then capture + encode to fragmented MP4.
 $ff = @("-hide_banner", "-y", "-stats_period", "5")
-$null = Measure "gdigrab-null" $ffmpeg ($ff + @("-f", "gdigrab", "-framerate", "30", "-i", "desktop", "-t", "$Seconds", "-f", "null", "-"))
-$null = Measure "gdigrab-h264_mf" $ffmpeg ($ff + @("-f", "gdigrab", "-framerate", "30", "-i", "desktop", "-t", "$Seconds",
+$null = Invoke-Run "gdigrab-null" $ffmpeg ($ff + @("-f", "gdigrab", "-framerate", "30", "-i", "desktop", "-t", "$Seconds", "-f", "null", "-"))
+$null = Invoke-Run "gdigrab-h264_mf" $ffmpeg ($ff + @("-f", "gdigrab", "-framerate", "30", "-i", "desktop", "-t", "$Seconds",
     "-vf", "scale=1920:-2,format=nv12", "-c:v", "h264_mf", "-b:v", "8M", "-g", "30",
     "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "results/gdigrab.mp4"))
-$null = Measure "ddagrab-null" $ffmpeg ($ff + @("-f", "lavfi", "-i", "ddagrab=framerate=30", "-t", "$Seconds",
+$null = Invoke-Run "ddagrab-null" $ffmpeg ($ff + @("-f", "lavfi", "-i", "ddagrab=framerate=30", "-t", "$Seconds",
     "-vf", "hwdownload,format=bgra", "-f", "null", "-"))
-$null = Measure "ddagrab-h264_mf" $ffmpeg ($ff + @("-f", "lavfi", "-i", "ddagrab=framerate=30", "-t", "$Seconds",
+$null = Invoke-Run "ddagrab-h264_mf" $ffmpeg ($ff + @("-f", "lavfi", "-i", "ddagrab=framerate=30", "-t", "$Seconds",
     "-vf", "hwdownload,format=bgra,scale=1920:-2,format=nv12", "-c:v", "h264_mf", "-b:v", "8M", "-g", "30",
     "-movflags", "+frag_keyframe+empty_moov+default_base_moof", "results/ddagrab.mp4"))
 Note ""
@@ -114,5 +114,7 @@ foreach ($f in "gdigrab", "ddagrab") {
 }
 
 Stop-Process -Id $anim.Id -ErrorAction SilentlyContinue
+$script:failed = -not $runs["wgc"]
 $summary -join "`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 $summary -join "`n" | Out-File -Encoding utf8 (Join-Path $results "summary.md")
+if ($script:failed) { Write-Error "wincap produced no results"; exit 1 }
