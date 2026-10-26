@@ -207,3 +207,44 @@ prototypes are not shipped.
    correct by resampling or timestamping).
 3. Windows encoding path and real 1080p30/60 fps (needs a real PC).
 4. Wayland on real GNOME/KDE desktops (portal dialog, restore token) — friends' machines.
+
+## Proposed M2 plan (screen + mic on macOS)
+
+Built only after the user has seen this and the macOS 12 real-device test has picked the
+screen API. Order = commit order; every commit builds and passes the tests on its own.
+
+1. **FFmpeg sidecars from Clips** (fetch, LGPL build, `verify_ffmpeg.py`, GPL-filter guard)
+   and `probe`: needed to check and recover recordings. `check_macos_binary.py` also checks
+   that ScreenCaptureKit is weak-linked.
+2. **Native recorder (Objective-C, `src-tauri/native/macos/`, built by `build.rs` with
+   `cc`)** behind a small C interface: screen source (ScreenCaptureKit on 13+, the measured
+   winner on 12), mic (AVCaptureSession, retimed to the host clock), one AVAssetWriter per
+   track (H.264 High/BT.709 or AAC 48 kHz; fragmented MP4, keyframe and fragment every
+   1 s), a ≈ 1 s queue in front of each writer, `fsync` every few seconds, overload
+   detection, mic level, a synthetic source for tests (capbench's counter + clicks).
+3. **Recording sessions in Rust:** one folder per recording in the app data folder
+   (`screen.mp4`, `mic.mp4`, `session.json` written atomically: start time, tracks, pauses,
+   state). States: idle → recording ⇄ paused → finishing → done.
+4. **Pause/resume without gaps:** stop appending on pause; on resume subtract the paused
+   time from every track's timestamps alike, so the files stay continuous and in sync.
+5. **After stop:** finish the files, check them with ffprobe (frames, durations, sync of
+   the tracks within one frame), store the result in `session.json`.
+6. **Crash recovery:** at start, recordings still marked "recording" are offered —
+   "Recover recording from 14:32 (12:05 long)" — and finished by remuxing the fragments
+   (`-c copy`, faststart), then checked like a normal stop.
+7. **Permissions screen:** screen recording and microphone status, plain-language
+   explanations, "Open System Preferences" at the right pane, the restart note for screen
+   recording on macOS 12.
+8. **Home / Record setup (M2 part):** display picker, mic picker with live level, 1080p or
+   720p at 30 fps, expected size per minute and free space, Record button; a plain
+   recording screen (time, pause/resume, stop) — countdown, floating control and global
+   shortcut stay in M5. Recent recordings with "Remove from Recent" and "Delete
+   recording…" (Voice's list). Keep the computer awake while recording (`awake.rs`).
+9. **Tests:** synthetic 1080p30 + mic through the real native path on the macOS CI runner
+   and locally: no missing frames, sync within one frame, also after pause/resume and over
+   a simulated hour (the synthetic source can run faster than real time); `kill -9`
+   mid-recording → recovered file ≤ 2 s shorter; app-level tests with a fake recorder on
+   all CI systems.
+
+Afterwards the user tests on the Mac: a real recording, pause/resume, a forced quit and
+recovery, the permission flow.
