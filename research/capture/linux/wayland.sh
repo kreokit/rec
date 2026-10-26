@@ -30,8 +30,11 @@ pipewire > results/pipewire.log 2>&1 &
 sleep 1
 wireplumber > results/wireplumber.log 2>&1 &
 pipewire-pulse > results/pipewire-pulse.log 2>&1 &
-# GLES on Mesa's software renderer: wlr-screencopy found no usable format with pixman.
-WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=gles2 WLR_RENDERER_ALLOW_SOFTWARE=1 sway -c "$XDG_CONFIG_HOME/sway/config" > results/sway.log 2>&1 &
+# GLES on Mesa's software renderer needs a DRM render node (vgem in CI); wlr-screencopy
+# found no usable format with pixman, which is the fallback without one.
+RENDERER=pixman; ls /dev/dri/renderD* > /dev/null 2>&1 && RENDERER=gles2
+echo "sway renderer: $RENDERER" > results/renderer.txt
+WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=$RENDERER WLR_RENDERER_ALLOW_SOFTWARE=1 sway -c "$XDG_CONFIG_HOME/sway/config" > results/sway.log 2>&1 &
 for i in $(seq 1 20); do [ -S "$XDG_RUNTIME_DIR/wayland-1" ] && break; sleep 0.5; done
 export WAYLAND_DISPLAY=wayland-1 XDG_CURRENT_DESKTOP=sway XDG_SESSION_TYPE=wayland
 dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR XDG_CONFIG_HOME
@@ -42,7 +45,7 @@ sleep 2
 SDL_VIDEODRIVER=wayland ffplay -hide_banner -loglevel error -f lavfi -i "testsrc2=size=1280x720:rate=60" -x 1280 -y 720 > results/ffplay.log 2>&1 &
 sleep 3
 
-say "## Linux Wayland capture research (headless sway $(sway --version | awk '{print $3}'), PipeWire $(pipewire --version | grep -o 'libpipewire [0-9.]*'))"
+say "## Linux Wayland capture research (headless sway $(sway --version | awk '{print $3}'), $RENDERER renderer, $(pipewire --version | grep -o 'libpipewire [0-9.]*' | head -1))"
 say '```'
 /usr/bin/time -f "%e %U %S" -o results/portal.time timeout 60 "$LINCAP" portal "$SECONDS_RUN" > results/portal.json 2> results/portal.err.txt
 read -r wall user sys < results/portal.time

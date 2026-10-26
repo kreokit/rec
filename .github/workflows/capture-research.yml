@@ -85,6 +85,12 @@ jobs:
             pipewire wireplumber pipewire-pulse pulseaudio-utils dbus-x11 ffmpeg time \
             libpipewire-0.3-dev libasound2-dev libclang-dev clang pkg-config \
             libgl1-mesa-dri libegl1 libegl-mesa0
+      - name: A DRM render node for sway's GLES renderer (vgem virtual GPU)
+        run: |
+          sudo apt-get install -y --no-install-recommends "linux-modules-extra-$(uname -r)" || true
+          sudo modprobe vgem || true
+          sudo chmod 666 /dev/dri/renderD* 2>/dev/null || true
+          ls -la /dev/dri || echo "no /dev/dri"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
