@@ -1,6 +1,7 @@
 # KreoKit Rec: build spec for Claude Code
 
 Read this before every task. It is the source of truth for scope and architecture.
+**Status (2026-10-26):** repo set up from the Voice/Clips foundations (`kreokit/rec`, public, dev port 1490, CI green). M1 capture research: synthetic macOS recording path, Windows and Linux measured on CI, findings + recommendation + proposed M2 plan in `docs/capture-research.md`. **Waiting for the user:** OK to run the macOS 12 real screen/camera/mic test (`research/capture/macos/run-real.sh`), which picks the macOS 12 screen API; then the go for M2. M2 not started.
 App #5 of the KreoKit suite. Published: KreoKit Captions (`kreokit/captions`), Cutout (`kreokit/cutout`), Clips (`kreokit/clips`), Voice (`kreokit/voice`). KreoKit Design was dropped and archived. Reuse the published apps wherever possible.
 
 ## What we are building
