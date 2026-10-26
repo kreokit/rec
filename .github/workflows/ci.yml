@@ -108,4 +108,4 @@ jobs:
       - name: The real-device bench (test builds) still builds
         if: runner.os == 'macOS'
         working-directory: src-tauri
-        run: cargo test --locked --features bench bench::
+        run: cargo test --locked --features bench "bench::"

@@ -25,6 +25,9 @@ static const int kRate = 48000;
 static const double kAllowance = 0.08;
 // Up to this much media waits in front of each encoder; beyond it, new media is dropped.
 static const double kQueueSeconds = 1.0;
+// A frame exactly on a slot boundary belongs to the next slot (synthetic frames land
+// exactly there; without a margin, rounding would decide).
+static const double kTie = 1e-6;
 // A small gap or overlap in the microphone's timestamps (jitter) is ignored up to this.
 static const int64_t kAudioTolerance = 96; // 2 ms
 
@@ -344,7 +347,7 @@ API_AVAILABLE(macos(12.3))
 }
 
 - (void)ingest:(CVPixelBufferRef)pb at:(double)t {
-    if (t < lastBoundary) {
+    if (t < lastBoundary - kTie) {
         st.frames_late++;
         if (current && t <= current->t) return;
     }
@@ -356,7 +359,7 @@ API_AVAILABLE(macos(12.3))
     [frames insertObject:f atIndex:i];
     // Only the newest frame before the next slot's boundary can still be used.
     double nb = [self nextBoundary];
-    while (frames.count >= 2 && frames[1]->t < nb) [frames removeObjectAtIndex:0];
+    while (frames.count >= 2 && frames[1]->t < nb - kTie) [frames removeObjectAtIndex:0];
 }
 
 // Writes every slot whose boundary is before `limit` (and before a pause or the stop).
@@ -369,7 +372,7 @@ API_AVAILABLE(macos(12.3))
         double boundary = hk + 0.5 / cfg.fps;
         if (boundary > limit) break;
         KRFrame *pick = nil;
-        while (frames.count && frames[0]->t < boundary) {
+        while (frames.count && frames[0]->t < boundary - kTie) {
             pick = frames[0];
             [frames removeObjectAtIndex:0];
         }
