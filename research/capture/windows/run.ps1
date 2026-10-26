@@ -94,7 +94,7 @@ Note ""
 
 Note "### wincap results"
 Note '```'
-foreach ($k in "wincap-list", "wgc", "wgc-readback", "dxgi", "dxgi-readback", "audio") { Note "$($k): $($runs[$k])" }
+foreach ($k in "wincap-list", "wgc", "wgc-readback", "dxgi", "dxgi-readback", "wasapi") { Note "$($k): $(Get-Content (Join-Path $results "$k.out.txt") -Raw)" }
 Note '```'
 Note "### FFmpeg results (last stats line; dup/drop are FFmpeg's own counters)"
 Note '```'
@@ -114,7 +114,7 @@ foreach ($f in "gdigrab", "ddagrab") {
 }
 
 Stop-Process -Id $anim.Id -ErrorAction SilentlyContinue
-$script:failed = -not $runs["wgc"]
+$script:failed = -not (Get-Content (Join-Path $results "dxgi.out.txt") -Raw)
 $summary -join "`n" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 $summary -join "`n" | Out-File -Encoding utf8 (Join-Path $results "summary.md")
 if ($script:failed) { Write-Error "wincap produced no results"; exit 1 }
