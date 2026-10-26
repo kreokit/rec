@@ -26,25 +26,31 @@ def probe(path: Path) -> dict:
     return json.loads(run(["ffprobe", "-v", "error", "-show_streams", "-show_format", "-of", "json", str(path)]))
 
 
-def video_frames(path: Path, height: int) -> list[tuple[float, int, bool]]:
-    """(pts seconds, decoded counter, marker on) for every frame in decode order."""
+def video_frames(path: Path, height: int, pattern: dict | None = None) -> list[tuple[float, int, bool]]:
+    """(pts seconds, decoded counter, marker on) for every frame in decode order. `pattern`
+    (capreal's pattern.json) places the counter inside a real screen recording; without it
+    the counter is capbench's, at the frame's top-left corner."""
+    cell = pattern["cell"] if pattern else CELL
+    x0 = round(pattern["x"]) if pattern else 0
+    y_bits = round(pattern["y"] + cell) if pattern else CELL
+    y_mark = round(pattern["marker_y"] + cell / 2) if pattern else height - CELL
     pts = [float(line.split(",")[0]) for line in run([
         "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=pts_time",
         "-of", "csv=p=0", str(path)]).decode().split() if line.strip()]
-    width = CELL * 34
+    width = round(cell * 34)
     # One pixel row through the counter squares' centres, plus one through the marker strip.
     rows = run([
         "ffmpeg", "-v", "error", "-i", str(path), "-fps_mode", "passthrough",
-        "-vf", f"format=gray,crop={width}:1:0:{CELL}", "-f", "rawvideo", "-"])
+        "-vf", f"format=gray,crop={width}:1:{x0}:{y_bits}", "-f", "rawvideo", "-"])
     marks = run([
         "ffmpeg", "-v", "error", "-i", str(path), "-fps_mode", "passthrough",
-        "-vf", f"format=gray,crop={width}:1:0:{height - CELL}", "-f", "rawvideo", "-"])
+        "-vf", f"format=gray,crop={width}:1:{x0}:{y_mark}", "-f", "rawvideo", "-"])
     frames = []
     for i in range(len(rows) // width):
         row = rows[i * width:(i + 1) * width]
         n = 0
         for b in range(BITS):
-            x = CELL // 2 + b * CELL + CELL // 2
+            x = round(cell / 2 + b * cell + cell / 2)
             n = (n << 1) | (1 if row[x] > 128 else 0)
         mark = marks[i * width:(i + 1) * width]
         frames.append((pts[i] if i < len(pts) else float("nan"), n, sum(mark) / width > 128))
@@ -52,24 +58,27 @@ def video_frames(path: Path, height: int) -> list[tuple[float, int, bool]]:
 
 
 def clicks(path: Path, rate: int = 48000) -> list[float]:
-    """Start times (s) of the clicks: the first sample above 0.4 after 0.1 s of quiet."""
+    """Start times (s) of the clicks: the first sample above the threshold after 0.5 s of
+    quiet. The threshold is 0.4 for capbench's digital clicks, and 30 % of the peak for
+    clicks picked up by a real mic from the speakers."""
     pcm = run(["ffmpeg", "-v", "error", "-i", str(path), "-ac", "1", "-ar", str(rate), "-f", "s16le", "-"])
     out, quiet_until = [], -1
     samples = array.array("h")
     samples.frombytes(pcm[: len(pcm) // 2 * 2])
-    threshold = int(0.4 * 32767)
+    peak = max((abs(s) for s in samples), default=0)
+    threshold = min(int(0.4 * 32767), max(int(0.3 * peak), 300))
     for i, s in enumerate(samples):
         if abs(s) > threshold:
             if i > quiet_until:
                 out.append(i / rate)
-            quiet_until = i + rate // 10
+            quiet_until = i + rate // 2
     return out
 
 
-def analyze_video(path: Path, fps: int) -> dict:
+def analyze_video(path: Path, fps: int, pattern: dict | None = None) -> dict:
     info = probe(path)
     stream = next(s for s in info["streams"] if s["codec_type"] == "video")
-    frames = video_frames(path, int(stream["height"]))
+    frames = video_frames(path, int(stream["height"]), pattern)
     counters = [n for _, n, _ in frames]
     gaps, repeats = 0, 0
     missing_runs = []
@@ -108,11 +117,15 @@ def main() -> None:
         fps = int(args[args.index("--fps") + 1])
     folder = Path(args[0])
     report: dict = {"videos": []}
-    for name in ("screen", "camera"):
+    pattern_file = folder / "pattern.json"
+    pattern = json.loads(pattern_file.read_text()) if pattern_file.exists() else None
+    # A real camera shows the room, not a counter: only the screen is read back then.
+    names = ("screen",) if pattern else ("screen", "camera")
+    for name in names:
         for ext in ("mp4", "mov"):
             path = folder / f"{name}.{ext}"
             if path.exists():
-                report["videos"].append(analyze_video(path, fps))
+                report["videos"].append(analyze_video(path, fps, pattern))
     mic = next((folder / f"mic.{e}" for e in ("mp4", "mov") if (folder / f"mic.{e}").exists()), None)
     if mic:
         info = probe(mic)

@@ -7,6 +7,12 @@ Not part of the app build.
   clicks once per second) through the planned recording path: VideoToolbox H.264 via
   AVAssetWriter into fragmented MP4, one file per source, all on the host clock. Prints
   CPU use, dropped frames and timing; writes `progress.txt` for crash tests.
+- `macos/capreal.m` (+ `make-capreal-app.sh`): the same recording path fed by the **real**
+  screen (ScreenCaptureKit or AVCaptureScreenInput), camera and mic. Only run with the
+  user's permission. It shows a small window with the frame counter (driven by the host
+  clock) so dropped screen frames are measurable, and `--beep` clicks through the speakers
+  on every sync marker so the mic recording measures A/V drift end to end.
+- `common.h`: the writer, encoder settings and CPU measurement both tools share.
 - `analyze.py`: reads the frame counter and clicks back from the files: missing or
   repeated frames, timestamp errors, A/V offset and drift, frames lost after `kill -9`.
 
