@@ -1,3 +1,6 @@
+mod ffmpeg;
+mod probe;
+
 use tauri::AppHandle;
 
 #[tauri::command]

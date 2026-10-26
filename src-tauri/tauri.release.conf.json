@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "externalBin": [
+      "binaries/ffmpeg",
+      "binaries/ffprobe"
+    ],
+    "publisher": "KreoKit contributors",
+    "copyright": "© 2026 KreoKit contributors. MIT OR Apache-2.0.",
+    "category": "Video",
+    "shortDescription": "Free, offline screen recorder: screen, camera and microphone into a clean MP4.",
+    "macOS": {
+      "signingIdentity": "-"
+    },
+    "resources": {
+      "../THIRD-PARTY-LICENSES.md": "THIRD-PARTY-LICENSES.md",
+      "binaries/FFMPEG-LICENSE.txt": "licenses/FFMPEG-LICENSE.txt"
+    }
+  }
+}

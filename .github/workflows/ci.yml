@@ -51,6 +51,18 @@ jobs:
       - name: THIRD-PARTY-LICENSES.md is up to date
         run: python scripts/third_party.py --check
 
+  ffmpeg:
+    name: LGPL FFmpeg sidecar (Linux)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/fetch_ffmpeg.py x86_64-unknown-linux-gnu
+      - run: python scripts/verify_ffmpeg.py x86_64-unknown-linux-gnu
+
   desktop:
     name: ${{ matrix.name }} tests
     strategy:
