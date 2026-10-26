@@ -5,6 +5,7 @@
 // source, all on the host clock), fed by:
 //   --screen sck   ScreenCaptureKit (macOS 12.3+), main display
 //   --screen avf   AVCaptureScreenInput (AVFoundation, the pre-12.3 way)
+//   --screen cgd   CGDisplayStream (CoreGraphics; what OBS uses for displays on macOS 12)
 //   --camera       the default camera at 1280x720, frame rate fixed to --fps
 //   --mic          the default microphone, converted to 48 kHz mono float
 //
@@ -103,6 +104,7 @@ static CMSampleBufferRef retimedToHost(CMSampleBufferRef sb, CMClockRef clock) {
 @property(nonatomic) AVCaptureSession *screenSession;
 @property(nonatomic) SCStream *scStream API_AVAILABLE(macos(12.3));
 @property(nonatomic) AVCaptureConnection *cameraConnection, *screenConnection;
+@property(nonatomic) CGDisplayStreamRef displayStream;
 @property(nonatomic) volatile BOOL stopping;
 @property(nonatomic) NSString *error;
 @end
@@ -221,7 +223,7 @@ int main(int argc, const char *argv[]) {
             }
         }
         if (!out) {
-            fprintf(stderr, "usage: capreal --out DIR [--seconds N] [--screen sck|avf|none] [--size WxH] [--fps N] [--camera] [--mic] [--beep] [--no-pattern]\n");
+            fprintf(stderr, "usage: capreal --out DIR [--seconds N] [--screen sck|avf|cgd|none] [--size WxH] [--fps N] [--camera] [--mic] [--beep] [--no-pattern]\n");
             return 2;
         }
         [[NSFileManager defaultManager] createDirectoryAtPath:out withIntermediateDirectories:YES attributes:nil error:nil];
@@ -342,6 +344,40 @@ int main(int argc, const char *argv[]) {
             [vo setSampleBufferDelegate:rec queue:captureQueue];
             [rec.screenSession addOutput:vo];
             rec.screenConnection = [vo connectionWithMediaType:AVMediaTypeVideo];
+        } else if ([screenMode isEqual:@"cgd"]) {
+            addVideoTrack(@"screen", sw, sh, 8000000);
+            NSDictionary *props = @{
+                (__bridge NSString *)kCGDisplayStreamMinimumFrameTime : @(1.0 / gFps),
+                (__bridge NSString *)kCGDisplayStreamShowCursor : @YES,
+                (__bridge NSString *)kCGDisplayStreamYCbCrMatrix : (__bridge NSString *)kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
+                (__bridge NSString *)kCGDisplayStreamQueueDepth : @8,
+            };
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            rec.displayStream = CGDisplayStreamCreateWithDispatchQueue(
+                displayID, (size_t)sw, (size_t)sh, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, (__bridge CFDictionaryRef)props, captureQueue,
+                ^(CGDisplayStreamFrameStatus status, uint64_t displayTime, IOSurfaceRef surface, CGDisplayStreamUpdateRef update) {
+                    if (status != kCGDisplayStreamFrameStatusFrameComplete || !surface) {
+                        if (status == kCGDisplayStreamFrameStatusFrameIdle) rec.stats[@"screen"].idle++;
+                        return;
+                    }
+                    // displayTime is mach_absolute_time: the host clock.
+                    CVPixelBufferRef pb = NULL;
+                    CVPixelBufferCreateWithIOSurface(NULL, surface, NULL, &pb);
+                    CMVideoFormatDescriptionRef desc = NULL;
+                    CMVideoFormatDescriptionCreateForImageBuffer(NULL, pb, &desc);
+                    CMSampleTimingInfo timing = {kCMTimeInvalid, CMClockMakeHostTimeFromSystemUnits(displayTime), kCMTimeInvalid};
+                    CMSampleBufferRef sb = NULL;
+                    CMSampleBufferCreateReadyWithImageBuffer(NULL, pb, desc, &timing, &sb);
+                    if (sb) [rec append:sb to:@"screen"], CFRelease(sb);
+                    if (desc) CFRelease(desc);
+                    CVPixelBufferRelease(pb);
+                });
+#pragma clang diagnostic pop
+            if (!rec.displayStream) {
+                fprintf(stderr, "CGDisplayStream: could not create the stream. Allow Screen Recording for capreal in System Preferences > Security & Privacy, then run again.\n");
+                return 1;
+            }
         } else if ([screenMode isEqual:@"sck"]) {
             if (!NSClassFromString(@"SCStream")) {
                 fprintf(stderr, "ScreenCaptureKit needs macOS 12.3 or newer\n");
@@ -410,6 +446,10 @@ int main(int argc, const char *argv[]) {
         for (Track *t in rec.tracks.allValues) startTrack(t, gT0);
         [rec.session startRunning];
         [rec.screenSession startRunning];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        if (rec.displayStream) CGDisplayStreamStart(rec.displayStream);
+#pragma clang diagnostic pop
         if (@available(macOS 12.3, *)) {
             if (rec.scStream)
                 [rec.scStream startCaptureWithCompletionHandler:^(NSError *e) {
@@ -430,6 +470,10 @@ int main(int argc, const char *argv[]) {
             rec.stopping = YES;
             [rec.session stopRunning];
             [rec.screenSession stopRunning];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            if (rec.displayStream) CGDisplayStreamStop(rec.displayStream);
+#pragma clang diagnostic pop
             if (@available(macOS 12.3, *)) {
                 if (rec.scStream) {
                     dispatch_semaphore_t stopped = dispatch_semaphore_create(0);

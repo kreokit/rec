@@ -107,6 +107,16 @@ jobs:
             -framework Foundation -framework AVFoundation -framework CoreMedia \
             -framework CoreVideo -framework VideoToolbox
           otool -l capbench | grep -A4 LC_BUILD_VERSION
+      - name: Newer SDK vs macOS 12 capture APIs (capreal builds; how the headers mark them)
+        run: |
+          research/capture/macos/make-capreal-app.sh . 2>&1 | tee results-capreal-build.txt
+          SDK=$(xcrun --show-sdk-path)
+          { echo "## macOS SDK $(xcrun --show-sdk-version) on ${{ matrix.os }}"; echo '```';
+            grep -h -B1 -A3 "CGDisplayStreamCreateWithDispatchQueue(" "$SDK/System/Library/Frameworks/CoreGraphics.framework/Headers/CGDisplayStream.h" | head -12;
+            grep -h -B3 "@interface AVCaptureScreenInput" "$SDK/System/Library/Frameworks/AVFoundation.framework/Headers/"*.h | head -6;
+            grep -h -A2 "@property(nonatomic) BOOL capturesAudio" "$SDK/System/Library/Frameworks/ScreenCaptureKit.framework/Headers/SCStream.h";
+            echo "capreal build:"; grep -E "warning|error|built" results-capreal-build.txt | head -10;
+            otool -L capreal.app/Contents/MacOS/capreal | grep -i screencapture; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Measure (30 s screen 1728x1080 + camera 720p + mic, then a kill -9 test)
         run: |
           mkdir -p results
