@@ -1,3 +1,5 @@
+#[cfg(feature = "bench")]
+mod bench;
 mod ffmpeg;
 mod native;
 mod probe;
@@ -26,6 +28,13 @@ fn report_problem(app: AppHandle) -> Result<(), String> {
     app.opener()
         .open_url(report_problem_url(), None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+/// `--bench ...` and `--bench-analyze DIR` in test builds (src/bench.rs); `None` for a
+/// normal start.
+#[cfg(feature = "bench")]
+pub fn bench_main() -> Option<i32> {
+    bench::main(&std::env::args().collect::<Vec<_>>())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

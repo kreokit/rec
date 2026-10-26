@@ -12,8 +12,13 @@ fn main() {
 /// and uses it only on 13+ (scripts/check_macos_binary.py allows exactly this framework).
 fn build_macos_recorder() {
     println!("cargo:rerun-if-changed=native/macos");
-    cc::Build::new()
-        .file("native/macos/recorder.m")
+    let mut build = cc::Build::new();
+    build.file("native/macos/recorder.m");
+    if env::var_os("CARGO_FEATURE_BENCH").is_some() {
+        build.file("native/macos/bench.m");
+        println!("cargo:rustc-link-lib=framework=AppKit");
+    }
+    build
         .flag("-fobjc-arc")
         .flag("-mmacosx-version-min=12.0")
         .flag("-Wno-unused-parameter")

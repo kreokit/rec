@@ -13,6 +13,11 @@ edition = "2024"
 name = "rec_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+# Real-device measurements in test builds (src/bench.rs, native/macos/bench.m); never in
+# releases.
+bench = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # Compiling the macOS recorder (native/macos, Objective-C).

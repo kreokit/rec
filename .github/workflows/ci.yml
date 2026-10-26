@@ -105,3 +105,7 @@ jobs:
         run: |
           cargo build --locked --manifest-path src-tauri/Cargo.toml
           python3 scripts/check_macos_binary.py src-tauri/target/debug/rec
+      - name: The real-device bench (test builds) still builds
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        run: cargo test --locked --features bench bench::
