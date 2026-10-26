@@ -122,11 +122,11 @@ jobs:
           research/capture/macos/make-capreal-app.sh . 2>&1 | tee results-capreal-build.txt
           SDK=$(xcrun --show-sdk-path)
           { echo "## macOS SDK $(xcrun --show-sdk-version) on ${{ matrix.os }}"; echo '```';
-            grep -h -B1 -A3 "CGDisplayStreamCreateWithDispatchQueue(" "$SDK/System/Library/Frameworks/CoreGraphics.framework/Headers/CGDisplayStream.h" | head -12;
-            grep -h -B3 "@interface AVCaptureScreenInput" "$SDK/System/Library/Frameworks/AVFoundation.framework/Headers/"*.h | head -6;
-            grep -h -A2 "@property(nonatomic) BOOL capturesAudio" "$SDK/System/Library/Frameworks/ScreenCaptureKit.framework/Headers/SCStream.h";
+            grep -h -A6 "CGDisplayStreamCreateWithDispatchQueue *(" "$SDK/System/Library/Frameworks/CoreGraphics.framework/Headers/CGDisplayStream.h" | grep -i -E "CGDisplayStreamCreateWithDispatchQueue|API_|AVAILABLE|DEPRECATED|OBSOLETE" | head -6 || true;
+            grep -h -B4 "@interface AVCaptureScreenInput" -r "$SDK/System/Library/Frameworks/AVFoundation.framework/Headers/" | head -8 || true;
+            grep -h -B1 -A1 "capturesAudio" "$SDK/System/Library/Frameworks/ScreenCaptureKit.framework/Headers/SCStream.h" | head -6 || true;
             echo "capreal build:"; grep -E "warning|error|built" results-capreal-build.txt | head -10;
-            otool -L capreal.app/Contents/MacOS/capreal | grep -i screencapture; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            otool -L capreal.app/Contents/MacOS/capreal | grep -i screencapture || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - name: Measure (30 s screen 1728x1080 + camera 720p + mic, then a kill -9 test)
         run: |
           mkdir -p results
