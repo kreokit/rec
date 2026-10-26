@@ -15,6 +15,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Compiling the macOS recorder (native/macos, Objective-C).
+cc = "1.9.0"
 
 [dependencies]
 tauri = { version = "2", features = [] }

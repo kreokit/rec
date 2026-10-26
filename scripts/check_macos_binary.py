@@ -8,7 +8,9 @@ Contents/Frameworks), fails unless:
 - its minimum macOS (LC_BUILD_VERSION / LC_VERSION_MIN_MACOSX `minos`) is at most --min-macos
 - it has no weak-imported symbols (except libc++'s operator new/delete and std exception
   typeinfo, and libSystem's _dispatch_once_f and __availability_version_check; see
-  ALLOWED_WEAK) and no weakly linked libraries
+  ALLOWED_WEAK) and no weakly linked libraries, except ScreenCaptureKit
+- ScreenCaptureKit, if linked at all, is linked weakly: it only exists from macOS 12.3, and
+  KreoKit Rec uses it on 13+ only (behind @available checks; CGDisplayStream on 12)
 
 Why: release builds use a newer SDK than dev builds. A system function that is newer than
 the minimum macOS gets weak-imported, and on an older macOS it resolves to NULL; calling it
@@ -38,7 +40,10 @@ ALLOWED_WEAK = re.compile(
     r"__Z(nw|na|dl|da)\S* \(from libc\+\+\)|__ZTISt\S* \(from libc\+\+\)"
     r"|_dispatch_once_f \(from libSystem\)"
     r"|__availability_version_check \(from libSystem\)"
+    r"|\S+ \(from ScreenCaptureKit\)"
 )
+# The one framework that may be weakly linked (see the docstring).
+WEAK_FRAMEWORK = "/System/Library/Frameworks/ScreenCaptureKit.framework/Versions/A/ScreenCaptureKit"
 
 MACHO_MAGICS = {
     bytes.fromhex(m)
@@ -88,7 +93,11 @@ def problems(binary: Path, min_macos: str) -> list[str]:
     # A weakly linked library or symbol that is missing on an older macOS is NULL at run
     # time. Code that checks for that first is fine, but nothing we ship needs it.
     for lib in re.findall(r"cmd LC_LOAD_WEAK_DYLIB\n.*\n\s*name (\S+)", load_commands):
-        found.append(f"weakly linked library {lib}")
+        if lib != WEAK_FRAMEWORK:
+            found.append(f"weakly linked library {lib}")
+    for lib in re.findall(r"cmd LC_LOAD_DYLIB\n.*\n\s*name (\S+)", load_commands):
+        if lib == WEAK_FRAMEWORK:
+            found.append("ScreenCaptureKit is linked strongly: the app wouldn't start on macOS 12.0-12.2")
     for line in run("nm", "-m", str(binary)).splitlines():
         if "(undefined) weak external" in line:
             symbol = line.split("weak external", 1)[1].strip()

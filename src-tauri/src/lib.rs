@@ -1,5 +1,7 @@
 mod ffmpeg;
+mod native;
 mod probe;
+mod testpattern;
 
 use tauri::AppHandle;
 

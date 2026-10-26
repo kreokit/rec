@@ -92,6 +92,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
+      # The recorder tests read their recordings back with ffmpeg (synthetic sources).
+      - name: FFmpeg for the recorder tests
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --locked
+      # The runner's SDK is newer than macOS 12, as in release builds.
+      - name: The app still runs on macOS 12 (weak links, minimum version)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --locked --manifest-path src-tauri/Cargo.toml
+          python3 scripts/check_macos_binary.py src-tauri/target/debug/rec
