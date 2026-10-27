@@ -1,7 +1,7 @@
 # KreoKit Rec: build spec for Claude Code
 
 Read this before every task. It is the source of truth for scope and architecture.
-**Status (2026-10-27):** M1 done (`docs/capture-research.md`); the user confirmed CGDisplayStream on macOS 12, ScreenCaptureKit on 13+. M2 built (screen + mic on macOS: native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen), tested on synthetic sources (incl. a simulated hour and kill -9 recovery). Real-device measurements done with the user's OK (`docs/m2-results.md`: 99.86 % fresh at 60→30 fps, sync within a frame plus ≈32 ms display delay, crash loss 0.15–0.4 s; recordings deleted). **Next: the user tries M2** with `test-build/KreoKit Rec Test.app` (identifier `com.kreokit.rec.claude-test`).
+**Status (2026-10-27):** M1 done (`docs/capture-research.md`). **M2 done**: screen + mic on macOS (native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen); synthetic tests (simulated hour, kill -9 recovery) and real-device measurements (`docs/m2-results.md`: 99.86 % fresh at 60→30 fps, sync within a frame plus ≈32 ms display delay, crash loss 0.15–0.4 s); the user tried the test app and everything worked. **Next: M3** (camera + computer sound + window/region + Windows/Linux): plan shown to the user before coding. See "Capture choices" and "Testing on the dev Mac" below.
 App #5 of the KreoKit suite. Published: KreoKit Captions (`kreokit/captions`), Cutout (`kreokit/cutout`), Clips (`kreokit/clips`), Voice (`kreokit/voice`). KreoKit Design was dropped and archived. Reuse the published apps wherever possible.
 
 ## What we are building
@@ -51,6 +51,34 @@ The hard part. Each system is different; research and measure before committing.
 - **Linux:** xdg-desktop-portal + PipeWire (Wayland and X11), with x11grab as a fallback on X11. PulseAudio/PipeWire monitor for computer sound.
 - Options to compare: native APIs via permissive Rust crates, our own small native code, or FFmpeg input devices in our LGPL build (avfoundation, gdigrab/ddagrab, x11grab). Pick per system what is most reliable, keeping licences permissive.
 - Measure on the dev machine (Intel i5, macOS 12): CPU use, dropped frames and A/V drift for 1080p30 screen + 720p camera + mic over 10 minutes.
+
+## Capture choices (decided in M1/M2, confirmed by the user)
+
+Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`.
+
+| | Screen | Camera, mic | Computer sound | Encode + write |
+|---|---|---|---|---|
+| **macOS 13+** | ScreenCaptureKit | AVFoundation | ScreenCaptureKit audio | VideoToolbox via AVAssetWriter, fragmented MP4 |
+| **macOS 12** | CGDisplayStream (ScreenCaptureKit only behind a runtime check, never displays on 12) | AVFoundation | "Needs macOS 13 or newer" | same |
+| **Windows 10/11** | Windows.Graphics.Capture (default update interval on older builds), DXGI duplication as fallback | Media Foundation | WASAPI loopback (cpal) | to measure in M3 on a real PC |
+| **Linux** | xdg-desktop-portal ScreenCast + PipeWire (ashpd, pipewire); x11grab only on X11 without a portal | V4L2/PipeWire | PipeWire capture-sink via cpal first; PulseAudio monitor only without PipeWire (cookie-less clients are rejected by pipewire-pulse) | OpenH264 / VA-API in our LGPL FFmpeg |
+
+- Native capture code on every system, never FFmpeg input devices (gdigrab can't hold 30 fps; avfoundation has no SCK/window exclusion). FFmpeg is for Finish/export only.
+- macOS code is our own Objective-C (`native/macos`, compiled with `cc`), C interface to Rust; APIs newer than 12 weak-linked + runtime checks.
+- Screen: **capture at 60 fps, keep one frame per 1/30 s slot** (30 fps capture gave only 98.1 % fresh). A frame exactly on a slot boundary goes to the next slot. Capture NV12 (`420v`) wherever offered (BGRA doubles CPU).
+- One fragmented MP4 per source, all on the host clock (`CMSyncConvertTime` for AVCaptureSession buffers); keyframe 1 s, fragment 1 s, regular `fsync`; a ≈1 s queue in front of each writer, never drop on "not ready"; overload is counted and shown, never silent.
+- Camera (M3): fix its frame rate (min = max frame duration) so it doesn't halve in low light; measure its real timing against the mic (open question in the research).
+
+## Testing on the dev Mac (test app)
+
+- **Test app:** `test-build/KreoKit Rec Test.app` (git-ignored), identifier `com.kreokit.rec.claude-test`, product name "KreoKit Rec Test", built with the `bench` feature:
+  `pnpm tauri build --debug --bundles app --features bench --config scripts/test-app.json` with `CARGO_TARGET_DIR` in the scratchpad, then copy the bundle into `test-build/`. Its microphone text comes from `src-tauri/Info.plist` (macOS won't ask without it; M3 adds the camera text there too).
+- **Keep it and its permissions.** It has Screen Recording + Microphone allowed. It is ad-hoc signed, so macOS ties the permissions to its exact binary hash (designated requirement = `cdhash`): **every rebuild loses them**, and the user has to allow again. Rebuild only when needed, once per test session, and say so first. Never give a helper tool the test app's bundle ID (LaunchServices + a different cdhash → permission loop). Never use the real identifier `com.kreokit.rec` for tests.
+- **Automated in-app checks** use a separate copy (`rec-claude-test`, own app data, cache and WebKit folders) with `KREOKIT_REC_SYNTHETIC=1` (made-up display + mic, synthetic recordings) or `=ask` (permissions shown as missing); no real devices. Test instances on port 1500; stop them afterwards. The webview's accessibility tree is empty: clicks go through a small CGEvent tool in the scratchpad.
+- **Real devices only with the user's OK in the chat, each time.** Delete the recordings afterwards, keep only the numbers.
+- **Bench (test builds, `--features bench`):** `rec --bench check` (permissions + devices, no recording); `rec --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60]` (counter window stepping 60×/s, still 2 s of every 10 s; reports fresh / stale / unchanged); `rec --bench sync --out DIR --mic` (key-tap sync test); `rec --bench-analyze DIR` prints the JSON report.
+- **Key-tap sync test** (done together with the user; a speaker clap was too quiet): the user presses the space bar firmly about once a second for 45 s; each press flashes a window white. The analysis finds clicks in the sound (30 dB above the room, not by the loudest press; the room is −84 dB, the user's mic input volume is 33 %) and flashes in the picture, and compares both to macOS's key event time. M2 result: click −6.7 ms, flash +31.6 ms (≈32 ms is the display's own delay), so the recording keeps picture and sound within one frame. M3 repeats it for the camera (a visible tap/clap in front of the camera against the mic click).
+- **Screen Recording permission loop (fixed in M2):** when two ad-hoc copies share a bundle ID, or after any update of an ad-hoc app, System Preferences ties the permission to the wrong copy and ticking the box does nothing. Rec writes `screen-permission-asked` in its app data when it asks; if the next start still has no permission, the Permissions screen offers **Reset and try again** (`tccutil reset ScreenCapture <own identifier>`, its own entry only) and falls back to the – / + steps in System Preferences. macOS 12 applies Screen Recording only after a restart (the screen says so).
 
 ## Recording design (for reliability)
 
