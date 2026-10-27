@@ -166,6 +166,7 @@ mod tests {
                 width: 1728,
                 height: 1080,
                 fps: 30,
+                own_windows_kept_out: false,
             }),
             mic: mic.then(|| "Mic".into()),
             camera: camera.then(|| CameraInfo {

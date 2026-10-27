@@ -57,6 +57,10 @@ pub struct ScreenInfo {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// The app's own windows were kept out of the picture (otherwise they're recorded where
+    /// they show).
+    #[serde(default)]
+    pub own_windows_kept_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -127,6 +131,10 @@ pub struct Options {
     /// The computer's sound (macOS 13+).
     #[serde(default)]
     pub system_audio: bool,
+    /// The app's own windows to keep out of the picture (set by the app, not the setup
+    /// screen).
+    #[serde(skip)]
+    pub own_windows: Vec<u32>,
 }
 
 /// The window the setup screen chose (`Window` in native.rs).
@@ -215,6 +223,10 @@ pub trait Capture: Send + Sync {
     fn resume(&self);
     fn status(&self) -> Status;
     fn stop(self: Box<Self>) -> (Status, Option<String>);
+    /// Whether the app's own windows (`ScreenConfig::exclude_windows`) are kept out.
+    fn own_windows_kept_out(&self) -> bool {
+        false
+    }
 }
 
 pub trait Backend: Send + Sync {
@@ -235,6 +247,9 @@ impl Capture for crate::native::Recorder {
     }
     fn stop(self: Box<Self>) -> (Status, Option<String>) {
         crate::native::Recorder::stop(*self)
+    }
+    fn own_windows_kept_out(&self) -> bool {
+        crate::native::Recorder::own_windows_kept_out(self)
     }
 }
 
@@ -425,7 +440,7 @@ impl Recordings {
             .camera_id
             .as_ref()
             .map(|_| camera_size(options.camera_width, options.camera_height));
-        let session = Session {
+        let mut session = Session {
             id,
             created_at,
             state: State::Recording,
@@ -436,6 +451,7 @@ impl Recordings {
                 width,
                 height,
                 fps: 30,
+                own_windows_kept_out: false,
             }),
             mic: options.mic_id.as_ref().map(|_| {
                 options
@@ -465,7 +481,7 @@ impl Recordings {
                 display_id: options.display_id,
                 region,
                 window: window.map(|w| w.id),
-                exclude_windows: Vec::new(),
+                exclude_windows: options.own_windows.clone(),
                 width,
                 height,
                 fps: 30,
@@ -491,6 +507,10 @@ impl Recordings {
                 return Err(e);
             }
         };
+        if let Some(screen) = session.screen.as_mut() {
+            screen.own_windows_kept_out = capture.own_windows_kept_out();
+            let _ = write_session(&dir, &session);
+        }
         *active = Some(Active {
             session: session.clone(),
             dir,
@@ -695,6 +715,7 @@ pub mod tests {
         paused_at: Mutex<Option<Instant>>,
         paused_total: Mutex<Duration>,
         mic: bool,
+        kept_out: bool,
     }
 
     impl FakeCapture {
@@ -727,6 +748,9 @@ pub mod tests {
             let status = self.status();
             make_tracks(&self.dir, status.frames as f64 / 30.0, self.mic, false);
             (status, None)
+        }
+        fn own_windows_kept_out(&self) -> bool {
+            self.kept_out
         }
     }
 
@@ -788,6 +812,10 @@ pub mod tests {
                 paused_at: Mutex::new(None),
                 paused_total: Mutex::new(Duration::ZERO),
                 mic: config.mic.is_some(),
+                kept_out: config
+                    .screen
+                    .as_ref()
+                    .is_some_and(|s| !s.exclude_windows.is_empty()),
             }))
         }
     }
@@ -809,6 +837,7 @@ pub mod tests {
             region: None,
             window: None,
             system_audio: false,
+            own_windows: Vec::new(),
         }
     }
 
@@ -848,9 +877,15 @@ pub mod tests {
     fn records_pauses_and_stops() {
         let root = temp_root("lifecycle");
         let recordings = fake(&root);
-        let session = recordings.start(&options()).unwrap();
+        let mut opts = options();
+        opts.own_windows = vec![42];
+        let session = recordings.start(&opts).unwrap();
         assert_eq!(session.state, State::Recording);
         assert_eq!(session.screen.as_ref().unwrap().width, 1728);
+        // What the recorder says about the app's own windows is kept with the recording.
+        assert!(session.screen.as_ref().unwrap().own_windows_kept_out);
+        let on_disk = read_session(&root.join(&session.id)).unwrap();
+        assert!(on_disk.screen.unwrap().own_windows_kept_out);
         assert!(
             recordings.start(&options()).is_err(),
             "one recording at a time"
@@ -899,6 +934,18 @@ pub mod tests {
         let kept = Arc::new(Mutex::new(None));
         let recordings = Recordings::new(root.to_path_buf(), Box::new(Keeps(kept.clone())));
         (recordings, kept)
+    }
+
+    #[test]
+    fn hands_the_own_windows_to_the_recorder() {
+        let root = temp_root("own-windows");
+        let (recordings, kept) = keeping(&root);
+        let mut opts = options();
+        opts.own_windows = vec![7, 9];
+        assert!(recordings.start(&opts).is_err());
+        let config = kept.lock().unwrap().take().unwrap();
+        assert_eq!(config.screen.unwrap().exclude_windows, vec![7, 9]);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

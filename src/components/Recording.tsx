@@ -108,7 +108,9 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
         <p className="rec-hint">
           {current.screen?.window
             ? "Only the chosen window is recorded, even when others cover it. If it closes, the recording keeps its last picture."
-            : "This window is recorded too while it's on screen. Minimize it (⌘M) if you don't want it in the video, and click KreoKit Rec in the Dock to come back."}
+            : current.screen?.own_windows_kept_out
+              ? "KreoKit Rec's own windows are kept out of the video."
+              : "This window is recorded too while it's on screen. Minimize it (⌘M) if you don't want it in the video, and click KreoKit Rec in the Dock to come back."}
         </p>
       </main>
     </div>

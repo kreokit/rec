@@ -24,6 +24,9 @@ use windows::Win32::System::Registry::{
 };
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
+};
 use windows::core::{HSTRING, PWSTR};
 use windows_capture::capture::{Context, GraphicsCaptureApiHandler};
 use windows_capture::dxgi_duplication_api::{DxgiDuplicationApi, Error as DxgiError};
@@ -59,34 +62,36 @@ fn media_foundation() -> Result<(), String> {
 
 // --- Permissions ------------------------------------------------------------------------
 
+/// A text value from the registry.
+fn registry_text(root: HKEY, key: &str, value: &str) -> Option<String> {
+    let mut buffer = [0u16; 64];
+    let mut size = (buffer.len() * 2) as u32;
+    unsafe {
+        RegGetValueW(
+            root,
+            &HSTRING::from(key),
+            &HSTRING::from(value),
+            RRF_RT_REG_SZ,
+            None,
+            Some(buffer.as_mut_ptr().cast()),
+            Some(&mut size),
+        )
+    }
+    .ok()
+    .ok()?;
+    let len = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
+    Some(String::from_utf16_lossy(&buffer[..len]))
+}
+
 /// Windows' privacy switch for `capability` ("webcam", "microphone"): denied when the
 /// switch for all apps or for desktop apps is off.
 fn consent(capability: &str) -> Access {
     let base = format!(
         "Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\{capability}"
     );
-    let read = |root: HKEY, key: &str| -> Option<String> {
-        let mut buffer = [0u16; 64];
-        let mut size = (buffer.len() * 2) as u32;
-        unsafe {
-            RegGetValueW(
-                root,
-                &HSTRING::from(key),
-                &HSTRING::from("Value"),
-                RRF_RT_REG_SZ,
-                None,
-                Some(buffer.as_mut_ptr().cast()),
-                Some(&mut size),
-            )
-        }
-        .ok()
-        .ok()?;
-        let len = buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len());
-        Some(String::from_utf16_lossy(&buffer[..len]))
-    };
     for root in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
         for key in [base.clone(), format!("{base}\\NonPackaged")] {
-            if read(root, &key).as_deref() == Some("Deny") {
+            if registry_text(root, &key, "Value").as_deref() == Some("Deny") {
                 return Access::Denied;
             }
         }
@@ -825,6 +830,25 @@ pub fn preview_stop() {
 
 pub fn mics() -> Vec<Mic> {
     crate::audio::mics()
+}
+
+/// Windows 10 version 2004 (build 19041) and newer keep marked windows out of every
+/// capture (`WDA_EXCLUDEFROMCAPTURE`); older builds would show them as black boxes.
+pub fn exclusion_supported() -> bool {
+    registry_text(
+        HKEY_LOCAL_MACHINE,
+        "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion",
+        "CurrentBuildNumber",
+    )
+    .and_then(|b| b.trim().parse::<u32>().ok())
+    .is_some_and(|build| build >= 19041)
+}
+
+/// Marks one of the app's windows to be kept out of screen captures (all apps' captures,
+/// screenshots included, so only while recording). False when Windows refused.
+pub fn exclude_from_capture(hwnd: isize, on: bool) -> bool {
+    let affinity = if on { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+    unsafe { SetWindowDisplayAffinity(HWND(hwnd as *mut c_void), affinity) }.is_ok()
 }
 
 pub fn system_audio_supported() -> bool {

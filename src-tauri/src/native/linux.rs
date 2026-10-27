@@ -142,6 +142,11 @@ pub fn displays() -> Vec<Display> {
     }]
 }
 
+/// The portal and X11 have no way to keep the app's own windows out of a capture.
+pub fn exclusion_supported() -> bool {
+    false
+}
+
 pub fn window_capture_supported() -> bool {
     portal_sources().is_some_and(|s| s.contains(SourceType::Window))
 }

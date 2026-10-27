@@ -93,6 +93,10 @@ int kr_rec_stop(void *rec, KrRecStatus *status, char *error, size_t error_len);
 
 // What this Mac can record: 1 when the computer sound can be recorded (macOS 13+), and
 // 1 when windows can be recorded (macOS 12.3+).
+// How many of the app's own windows (KrRecConfig.exclude_windows) the screen stream keeps out
+// of the picture; 0 when they would be recorded (CGDisplayStream, or none was given).
+int kr_rec_kept_out(void *rec);
+
 int kr_system_audio_supported(void);
 int kr_window_capture_supported(void);
 

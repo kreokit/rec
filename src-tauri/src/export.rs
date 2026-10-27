@@ -703,6 +703,7 @@ pub mod tests {
                 width: screen.0,
                 height: screen.1,
                 fps: 30,
+                own_windows_kept_out: false,
             }),
             mic: mic.then(|| "Test microphone".into()),
             camera: camera.map(|(width, height)| CameraInfo {

@@ -279,6 +279,9 @@ struct Devices {
     /// A region can be chosen; otherwise why not.
     regions: bool,
     regions_note: Option<String>,
+    /// The app's own windows can be kept out of display and region recordings (otherwise
+    /// the controls go to the menu bar or tray while recording).
+    own_windows_kept_out: bool,
     /// "macos", "windows" or "linux".
     os: &'static str,
 }
@@ -375,6 +378,7 @@ async fn devices() -> Result<Devices, String> {
             windows_note: None,
             regions: true,
             regions_note: None,
+            own_windows_kept_out: true,
             os: std::env::consts::OS,
         });
     }
@@ -391,6 +395,7 @@ async fn devices() -> Result<Devices, String> {
             windows_note,
             regions,
             regions_note,
+            own_windows_kept_out: native::exclusion_supported(),
             os: std::env::consts::OS,
         })
     })
@@ -592,12 +597,60 @@ async fn camera_preview_stop() -> Result<(), String> {
     .await
 }
 
+/// The app's own windows, to keep out of the recording where the system allows it
+/// (docs/m5-results.md). macOS: their numbers, for the recorder. Windows: each window is
+/// marked while recording (`on`; unmarked again at the stop, so screenshots of the app
+/// work otherwise). Linux: nothing can keep them out.
+#[allow(unused_variables)]
+fn own_windows(app: &AppHandle, on: bool) -> Vec<u32> {
+    #[cfg(target_os = "macos")]
+    {
+        if !on {
+            return Vec::new();
+        }
+        let handles: Vec<usize> = app
+            .webview_windows()
+            .values()
+            .filter_map(|w| w.ns_window().ok().map(|p| p as usize))
+            .collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = app.run_on_main_thread(move || {
+            let numbers = handles
+                .iter()
+                .map(|&ns| native::window_number(ns as *mut std::ffi::c_void))
+                .filter(|&n| n != 0)
+                .collect::<Vec<u32>>();
+            let _ = tx.send(numbers);
+        });
+        rx.recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap_or_default()
+    }
+    #[cfg(windows)]
+    {
+        if native::exclusion_supported() {
+            for window in app.webview_windows().values() {
+                if let Ok(hwnd) = window.hwnd() {
+                    native::exclude_from_capture(hwnd.0 as isize, on);
+                }
+            }
+        }
+        Vec::new()
+    }
+    #[cfg(target_os = "linux")]
+    Vec::new()
+}
+
 #[tauri::command]
-async fn start_recording(app: AppHandle, options: Options) -> Result<Session, String> {
+async fn start_recording(app: AppHandle, mut options: Options) -> Result<Session, String> {
     blocking(move || {
         native::monitor_stop();
         native::preview_stop();
-        recordings(&app).start(&options)
+        options.own_windows = own_windows(&app, true);
+        let started = recordings(&app).start(&options);
+        if started.is_err() {
+            own_windows(&app, false);
+        }
+        started
     })
     .await
 }
@@ -619,7 +672,12 @@ async fn live_status(app: AppHandle) -> Result<Option<Live>, String> {
 
 #[tauri::command]
 async fn stop_recording(app: AppHandle) -> Result<Session, String> {
-    blocking(move || recordings(&app).stop()).await
+    blocking(move || {
+        let stopped = recordings(&app).stop();
+        own_windows(&app, false);
+        stopped
+    })
+    .await
 }
 
 #[tauri::command]

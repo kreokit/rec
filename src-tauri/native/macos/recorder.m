@@ -358,6 +358,7 @@ static NSDictionary *floatMonoSettings(void) {
     KrRecConfig cfg;
     NSString *dir, *micId, *cameraId;
     NSArray<NSNumber *> *excludeIds; // cfg.exclude_windows
+    int keptOut;                      // windows the screen stream keeps out
     dispatch_queue_t q;
     double t0;
     double pausedTotal, pauseStart; // pauseStart < 0: not paused
@@ -907,14 +908,34 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
     return NO;
 }
 
+// Whether one of `ids` is on screen over `display`.
+static BOOL windowShownOn(NSArray<NSNumber *> *ids, CGDirectDisplayID display) {
+    if (!ids.count) return NO;
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID);
+    BOOL shown = NO;
+    for (NSDictionary *info in (__bridge NSArray *)list) {
+        if (![ids containsObject:info[(id)kCGWindowNumber]]) continue;
+        CGRect bounds;
+        if (CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)info[(id)kCGWindowBounds], &bounds) &&
+            CGRectIntersectsRect(bounds, CGDisplayBounds(display)))
+            shown = YES;
+    }
+    if (list) CFRelease(list);
+    return shown;
+}
+
 - (BOOL)startScreen:(NSString **)message {
     int api = cfg.screen_api;
+    CGDirectDisplayID display = cfg.display_id ? cfg.display_id : CGMainDisplayID();
     if (api == KR_SCREEN_AUTO) {
         if (@available(macOS 13.0, *)) api = KR_SCREEN_SCREENCAPTUREKIT;
+        // On 12, ScreenCaptureKit only while one of the app's own windows is on the recorded
+        // display, to keep it out; otherwise CGDisplayStream: fresher, cheaper
+        // (docs/m5-results.md).
+        else if (@available(macOS 12.3, *)) api = windowShownOn(excludeIds, display) ? KR_SCREEN_SCREENCAPTUREKIT : KR_SCREEN_CGDISPLAYSTREAM;
         else api = KR_SCREEN_CGDISPLAYSTREAM;
     }
     if (cfg.window_id) api = KR_SCREEN_SCREENCAPTUREKIT; // CGDisplayStream can't record windows
-    CGDirectDisplayID display = cfg.display_id ? cfg.display_id : CGMainDisplayID();
     if (api == KR_SCREEN_CGDISPLAYSTREAM) {
         NSMutableDictionary *props = @{
             (__bridge NSString *)kCGDisplayStreamMinimumFrameTime : @(1.0 / cfg.capture_fps),
@@ -978,6 +999,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
             for (SCWindow *w in content.windows)
                 if ([excludeIds containsObject:@(w.windowID)]) [excluded addObject:w];
             filter = [[SCContentFilter alloc] initWithDisplay:found excludingWindows:excluded];
+            keptOut = (int)excluded.count;
         }
         SCStreamConfiguration *c = [SCStreamConfiguration new];
         c.width = (size_t)cfg.width;
@@ -1477,6 +1499,12 @@ char *kr_cameras_json(void) {
         }
         return jsonCopy(list);
     }
+}
+
+int kr_rec_kept_out(void *recorder) {
+    KRRecorder *rec = (__bridge KRRecorder *)recorder;
+    // Synthetic recordings have no real windows: as if they were kept out.
+    return rec->cfg.synthetic ? (int)rec->excludeIds.count : rec->keptOut;
 }
 
 int kr_system_audio_supported(void) {

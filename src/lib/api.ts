@@ -88,6 +88,8 @@ export interface Devices {
   /** A region can be chosen; otherwise why not. */
   regions: boolean;
   regions_note: string | null;
+  /** Rec's own windows can be kept out of display and region recordings. */
+  own_windows_kept_out: boolean;
   os: Os;
 }
 
@@ -160,6 +162,8 @@ export interface Session {
     width: number;
     height: number;
     fps: number;
+    /** Rec's own windows were kept out of the picture. */
+    own_windows_kept_out?: boolean;
   } | null;
   mic: string | null;
   camera: { name: string; width: number; height: number } | null;

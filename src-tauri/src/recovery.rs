@@ -141,6 +141,7 @@ mod tests {
                 width: 320,
                 height: 180,
                 fps: 30,
+                own_windows_kept_out: false,
             }),
             mic: Some("Microphone".into()),
             camera: None,

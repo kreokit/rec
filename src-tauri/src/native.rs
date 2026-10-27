@@ -251,6 +251,7 @@ mod macos {
         fn kr_rec_pause(rec: *mut c_void);
         fn kr_rec_resume(rec: *mut c_void);
         fn kr_rec_status(rec: *mut c_void, status: *mut KrRecStatus);
+        fn kr_rec_kept_out(rec: *mut c_void) -> c_int;
         fn kr_rec_stop(
             rec: *mut c_void,
             status: *mut KrRecStatus,
@@ -271,7 +272,6 @@ mod macos {
         fn kr_window_capture_supported() -> c_int;
         fn kr_free(s: *mut c_char);
         fn kr_overlay_window(ns_window: *mut std::ffi::c_void);
-        #[cfg(feature = "bench")]
         fn kr_window_number(ns_window: *mut std::ffi::c_void) -> u32;
         fn kr_mic_monitor_start(mic_id: *const c_char, error: *mut c_char, len: usize) -> c_int;
         fn kr_mic_monitor_peak() -> f32;
@@ -401,6 +401,11 @@ mod macos {
             status.into()
         }
 
+        /// Whether the app's own windows are kept out of the screen picture.
+        pub fn own_windows_kept_out(&self) -> bool {
+            unsafe { kr_rec_kept_out(self.0) > 0 }
+        }
+
         /// Stops and finishes the files. The error (a source or file failed during the
         /// recording) comes with the final status: the files are kept either way.
         pub fn stop(mut self) -> (Status, Option<String>) {
@@ -499,6 +504,12 @@ mod macos {
         unsafe { kr_window_capture_supported() != 0 }
     }
 
+    /// The app's own windows can be kept out of display and region recordings
+    /// (ScreenCaptureKit, macOS 12.3+; measured on 12 in docs/m5-results.md).
+    pub fn exclusion_supported() -> bool {
+        window_capture_supported()
+    }
+
     /// Opens the microphone for the level meter (no recording).
     pub fn monitor_start(mic_id: &str) -> Result<(), String> {
         let id = CString::new(mic_id).map_err(|e| e.to_string())?;
@@ -563,8 +574,8 @@ mod macos {
         unsafe { kr_overlay_window(ns_window) }
     }
 
-    /// A window's CGWindowID (the test version's pattern window). Main thread only.
-    #[cfg(feature = "bench")]
+    /// A window's CGWindowID (the app's own windows, kept out of recordings; the test
+    /// version's pattern window). Main thread only.
     pub fn window_number(ns_window: *mut std::ffi::c_void) -> u32 {
         if ns_window.is_null() {
             return 0;
@@ -586,7 +597,7 @@ mod portable {
     use crate::pipeline::{self, Core, Inputs};
 
     /// A running recording. Dropping it without [`Recorder::stop`] stops it too.
-    pub struct Recorder(pipeline::Recorder);
+    pub struct Recorder(pipeline::Recorder, bool);
 
     impl Recorder {
         pub fn start(config: &RecordConfig) -> Result<Recorder, String> {
@@ -607,11 +618,10 @@ mod portable {
             let core: Arc<Core> = Core::new(config, inputs)?;
             let generator = crate::synthetic::start(core.clone(), config, flags);
             let pictures = config.screen.is_some() || config.camera.is_some();
-            Ok(Recorder(pipeline::Recorder::new(
-                core,
-                vec![Box::new(generator)],
-                pictures,
-            )))
+            Ok(Recorder(
+                pipeline::Recorder::new(core, vec![Box::new(generator)], pictures),
+                kept_out(config),
+            ))
         }
 
         pub fn pause(&self) {
@@ -626,6 +636,12 @@ mod portable {
             self.0.status()
         }
 
+        /// Whether the app's own windows are kept out of the screen picture (the windows
+        /// themselves are marked: `exclude_from_capture`).
+        pub fn own_windows_kept_out(&self) -> bool {
+            self.1
+        }
+
         /// Stops and finishes the files. The error (a source or file failed during the
         /// recording) comes with the final status: the files are kept either way.
         pub fn stop(self) -> (Status, Option<String>) {
@@ -638,14 +654,28 @@ mod portable {
     fn system(config: &RecordConfig) -> Result<Recorder, String> {
         let (core, sources) = super::win::start(config)?;
         let pictures = config.screen.is_some() || config.camera.is_some();
-        Ok(Recorder(pipeline::Recorder::new(core, sources, pictures)))
+        Ok(Recorder(
+            pipeline::Recorder::new(core, sources, pictures),
+            kept_out(config),
+        ))
     }
 
     #[cfg(target_os = "linux")]
     fn system(config: &RecordConfig) -> Result<Recorder, String> {
         let (core, sources) = super::linux::start(config)?;
         let pictures = config.screen.is_some() || config.camera.is_some();
-        Ok(Recorder(pipeline::Recorder::new(core, sources, pictures)))
+        Ok(Recorder(
+            pipeline::Recorder::new(core, sources, pictures),
+            kept_out(config),
+        ))
+    }
+
+    fn kept_out(config: &RecordConfig) -> bool {
+        config
+            .screen
+            .as_ref()
+            .is_some_and(|s| !s.exclude_windows.is_empty())
+            && (config.synthetic.is_some() || super::exclusion_supported())
     }
 
     /// The pipe-recorder feature on macOS: synthetic sources only.
@@ -659,19 +689,19 @@ mod portable {
 mod win;
 #[cfg(windows)]
 pub use win::{
-    camera_access, cameras, displays, mic_access, mics, monitor_peak, monitor_start, monitor_stop,
-    preview_frame, preview_start, preview_stop, request_camera_access, request_mic_access,
-    request_screen_access, screen_access, system_audio_supported, window_capture_supported,
-    windows,
+    camera_access, cameras, displays, exclude_from_capture, exclusion_supported, mic_access, mics,
+    monitor_peak, monitor_start, monitor_stop, preview_frame, preview_start, preview_stop,
+    request_camera_access, request_mic_access, request_screen_access, screen_access,
+    system_audio_supported, window_capture_supported, windows,
 };
 
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
-    camera_access, cameras, displays, mic_access, mics, monitor_peak, monitor_start, monitor_stop,
-    preview_frame, preview_start, preview_stop, request_camera_access, request_mic_access,
-    request_screen_access, screen_access, set_data_dir, system_audio_supported,
+    camera_access, cameras, displays, exclusion_supported, mic_access, mics, monitor_peak,
+    monitor_start, monitor_stop, preview_frame, preview_start, preview_stop, request_camera_access,
+    request_mic_access, request_screen_access, screen_access, set_data_dir, system_audio_supported,
     window_capture_supported, windows,
 };
 
@@ -860,7 +890,13 @@ pub(crate) mod tests {
     fn records_synthetic_screen_camera_and_mic() {
         let _timing = alongside();
         let dir = temp_dir("basic");
-        let rec = Recorder::start(&synthetic(dir.clone(), 640, 360, false)).unwrap();
+        let mut config = synthetic(dir.clone(), 640, 360, false);
+        assert!(!Recorder::start(&config).unwrap().own_windows_kept_out());
+        temp_dir("basic");
+        // Synthetic recordings report the app's own windows as kept out.
+        config.screen.as_mut().unwrap().exclude_windows = vec![12];
+        let rec = Recorder::start(&config).unwrap();
+        assert!(rec.own_windows_kept_out());
         wait_for(&rec, 10.0);
         let (status, error) = rec.stop();
         assert_eq!(error, None);
