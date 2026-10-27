@@ -50,6 +50,38 @@ export interface Camera {
   height: number;
 }
 
+/** A window that can be recorded. */
+export interface Window {
+  id: number;
+  app: string;
+  title: string;
+  /** In points, and the pixels per point of its display. */
+  width: number;
+  height: number;
+  scale: number;
+}
+
+/** The window chosen on Home (sessions.rs `WindowChoice`). */
+export interface WindowChoice {
+  id: number;
+  /** "App – Title". */
+  name: string;
+  width: number;
+  height: number;
+  scale: number;
+}
+
+export interface Devices {
+  displays: Display[];
+  mics: Mic[];
+  cameras: Camera[];
+  /** The computer sound can be recorded (macOS 13+). */
+  system_audio: boolean;
+  /** Windows can be recorded; otherwise why not. */
+  windows: boolean;
+  windows_note: string | null;
+}
+
 export interface Estimate {
   width: number;
   height: number;
@@ -76,6 +108,11 @@ export interface Status {
   audio_filled: number;
   audio_dropped: number;
   mic_peak: number;
+  system_samples?: number;
+  system_filled?: number;
+  system_dropped?: number;
+  window_closed?: boolean;
+  window_closed_at?: number;
   paused: boolean;
   failed: boolean;
 }
@@ -92,6 +129,7 @@ export interface Check {
   screen: TrackCheck | null;
   camera: TrackCheck | null;
   mic: TrackCheck | null;
+  system?: TrackCheck | null;
   start_offset_ms: number | null;
   end_offset_ms: number | null;
   camera_start_offset_ms: number | null;
@@ -105,9 +143,19 @@ export interface Session {
   id: string;
   created_at: number;
   state: State;
-  screen: { display: string; region: Region | null; width: number; height: number; fps: number } | null;
+  screen: {
+    display: string;
+    region: Region | null;
+    /** A window instead of the display: "App – Title". */
+    window?: string | null;
+    width: number;
+    height: number;
+    fps: number;
+  } | null;
   mic: string | null;
   camera: { name: string; width: number; height: number } | null;
+  /** The computer's sound was recorded too. */
+  system_audio?: boolean;
   elapsed_s: number;
   pauses: number;
   check: Check | null;
@@ -135,6 +183,8 @@ export interface Options {
   camera_height: number;
   display_points_width: number;
   region: Region | null;
+  window: WindowChoice | null;
+  system_audio: boolean;
 }
 
 export const api = {
@@ -145,9 +195,20 @@ export const api = {
   resetScreenPermission: () => invoke<void>("reset_screen_permission"),
   openPrivacySettings: (kind: "screen" | "mic" | "camera") => invoke<void>("open_privacy_settings", { kind }),
   restartApp: () => invoke<void>("restart_app"),
-  devices: () => invoke<{ displays: Display[]; mics: Mic[]; cameras: Camera[] }>("devices"),
+  devices: () => invoke<Devices>("devices"),
+  /** The windows that can be recorded now. */
+  windows: () => invoke<Window[]>("windows"),
   /** The camera's size, or 0 × 0 when it's off. */
-  estimate: (display: Display, region: Region | null, quality: number, cameraWidth: number, cameraHeight: number, mic: boolean) =>
+  estimate: (
+    display: Display,
+    region: Region | null,
+    quality: number,
+    cameraWidth: number,
+    cameraHeight: number,
+    mic: boolean,
+    window: WindowChoice | null,
+    systemAudio: boolean,
+  ) =>
     invoke<Estimate>("estimate", {
       width: display.width,
       height: display.height,
@@ -157,6 +218,8 @@ export const api = {
       cameraWidth,
       cameraHeight,
       mic,
+      window,
+      systemAudio,
     }),
   monitorStart: (micId: string) => invoke<void>("monitor_start", { micId }),
   monitorLevel: () => invoke<number>("monitor_level"),

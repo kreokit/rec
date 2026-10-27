@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Trash2, TriangleAlert, Video } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { Camera, Display, Estimate, Mic as MicDevice, Options, Region, Session, api } from "../lib/api";
+import { Camera, Display, Estimate, Mic as MicDevice, Options, Region, Session, Window, WindowChoice, api } from "../lib/api";
 import { checkSummary, clockTime, formatBytes, formatDuration, formatRoom, recordingTitle } from "../lib/format";
 import { regionPixels } from "../lib/region";
-import { Button, Field, ICON_STROKE, Menu, MenuEntry, Segmented, Select, toast, useContextMenu } from "../ui";
+import { Button, Field, ICON_STROKE, Menu, MenuEntry, Segmented, Select, Switch, toast, useContextMenu } from "../ui";
 import { CameraPreview } from "./CameraPreview";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { LevelMeter, useMonitorPeak } from "./LevelMeter";
@@ -17,11 +17,30 @@ const NO_CAMERA = "none";
 /** The last setup, kept while the app runs: Home comes back as it was after a recording. */
 const last: {
   displayId: string;
-  area: "display" | "region";
+  area: "display" | "region" | "window";
   region: Region | null;
+  windowId: string;
   cameraId: string;
   quality: "1080" | "720";
-} = { displayId: "", area: "display", region: null, cameraId: NO_CAMERA, quality: "1080" };
+  systemAudio: boolean;
+} = {
+  displayId: "",
+  area: "display",
+  region: null,
+  windowId: "",
+  cameraId: NO_CAMERA,
+  quality: "1080",
+  systemAudio: false,
+};
+
+/** "App – Title", or whichever of the two it has. */
+function windowName(w: Window): string {
+  return w.app && w.title ? `${w.app} – ${w.title}` : w.app || w.title;
+}
+
+function windowChoice(w: Window): WindowChoice {
+  return { id: w.id, name: windowName(w), width: w.width, height: w.height, scale: w.scale };
+}
 
 /** Home: recover a cut-off recording, set up and start a new one, or find a recent one. */
 export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (session: Session) => void }) {
@@ -35,6 +54,13 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   // The whole display, or part of it (dragged in the region overlay).
   const [area, setArea] = useState(last.area);
   const [region, setRegion] = useState(last.region);
+  // Or a window (ScreenCaptureKit); the list is asked for each time "Window" is chosen.
+  const [windows, setWindows] = useState<Window[]>([]);
+  const [windowId, setWindowId] = useState(last.windowId);
+  const [windowSupport, setWindowSupport] = useState<{ ok: boolean; note: string | null }>({ ok: false, note: null });
+  // The computer's sound (macOS 13+).
+  const [systemSupported, setSystemSupported] = useState(false);
+  const [systemAudio, setSystemAudio] = useState(last.systemAudio);
   const [quality, setQuality] = useState(last.quality);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [recent, setRecent] = useState<Session[] | null>(null);
@@ -50,10 +76,14 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   useEffect(refresh, [refresh]);
 
   useEffect(() => {
-    api.devices().then(({ displays, mics, cameras }) => {
+    api.devices().then(({ displays, mics, cameras, system_audio, windows, windows_note }) => {
       setDisplays(displays);
       setMics(mics);
       setCameras(cameras);
+      setSystemSupported(system_audio);
+      if (!system_audio) setSystemAudio(false);
+      setWindowSupport({ ok: windows, note: windows_note });
+      if (!windows && last.area === "window") setArea("display");
       // The display and camera chosen before, if they're still there.
       if (!displays.some((d) => String(d.id) === last.displayId)) {
         const main = displays.find((d) => d.main) ?? displays[0];
@@ -68,14 +98,30 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   }, [micAllowed]);
 
   useEffect(() => {
-    Object.assign(last, { displayId, area, region, cameraId, quality });
-  }, [displayId, area, region, cameraId, quality]);
+    Object.assign(last, { displayId, area, region, windowId, cameraId, quality, systemAudio });
+  }, [displayId, area, region, windowId, cameraId, quality, systemAudio]);
+
+  const loadWindows = useCallback(() => {
+    api.windows().then(
+      (list) => {
+        setWindows(list);
+        // The window chosen before, if it's still open; else the first one.
+        setWindowId((id) => (list.some((w) => String(w.id) === id) ? id : list[0] ? String(list[0].id) : ""));
+      },
+      (e) => toast(String(e), "error"),
+    );
+  }, []);
+  useEffect(() => {
+    if (area === "window") loadWindows();
+  }, [area, loadWindows]);
 
   const display = displays.find((d) => String(d.id) === displayId);
   const mic = mics.find((m) => m.id === micId);
   const camera = cameras.find((c) => c.id === cameraId);
   const peak = useMonitorPeak(!!mic);
   const chosenRegion = area === "region" ? region : null;
+  const chosenWindowItem = area === "window" ? windows.find((w) => String(w.id) === windowId) : undefined;
+  const chosenWindow = useMemo(() => (chosenWindowItem ? windowChoice(chosenWindowItem) : null), [chosenWindowItem]);
   const regionSize = chosenRegion && display ? regionPixels(chosenRegion, display.width, display.points_width) : null;
   const regionRef = useRef(region);
   regionRef.current = region;
@@ -83,9 +129,9 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   useEffect(() => {
     if (!display) return;
     api
-      .estimate(display, chosenRegion, Number(quality), camera?.width ?? 0, camera?.height ?? 0, !!mic)
+      .estimate(display, chosenRegion, Number(quality), camera?.width ?? 0, camera?.height ?? 0, !!mic, chosenWindow, systemAudio)
       .then(setEstimate, () => setEstimate(null));
-  }, [display, chosenRegion, quality, mic, camera]);
+  }, [display, chosenRegion, quality, mic, camera, chosenWindow, systemAudio]);
 
   // The overlay's answer. Cancelled without a region before: back to the whole display.
   useEffect(() => {
@@ -144,6 +190,10 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
 
   const record = async () => {
     if (!display) return;
+    if (area === "window" && !chosenWindow) {
+      toast("Choose a window to record, or record the whole display.", "error");
+      return;
+    }
     const options: Options = {
       display_id: display.id,
       display_name: display.name,
@@ -158,6 +208,8 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       camera_height: camera?.height ?? 0,
       display_points_width: display.points_width,
       region: chosenRegion,
+      window: chosenWindow,
+      system_audio: systemAudio,
     };
     setBusy(true);
     try {
@@ -237,13 +289,22 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
             <Field
               label="Screen"
               hint={
-                regionSize && (
+                area === "window" ? (
+                  <span className="region-chosen">
+                    {windows.length === 0 ? "No window to record. Open one, then refresh." : "Shows the window even when others cover it."}
+                    <Button variant="ghost" size="sm" onClick={loadWindows}>
+                      Refresh
+                    </Button>
+                  </span>
+                ) : regionSize ? (
                   <span className="region-chosen">
                     Region {regionSize.width} × {regionSize.height}
                     <Button variant="ghost" size="sm" onClick={chooseRegion}>
                       Change…
                     </Button>
                   </span>
+                ) : (
+                  !windowSupport.ok && windowSupport.note
                 )
               }
             >
@@ -261,12 +322,25 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
                 <Segmented
                   label="What to record"
                   value={area}
-                  onChange={(value) => (value === "region" ? chooseRegion() : setArea("display"))}
+                  onChange={(value) => (value === "region" ? chooseRegion() : setArea(value))}
                   options={[
                     { value: "display", label: "Whole display" },
                     { value: "region", label: "Region…" },
+                    { value: "window", label: "Window", disabled: !windowSupport.ok },
                   ]}
                 />
+                {area === "window" && (
+                  <Select
+                    label="Window"
+                    value={windowId}
+                    onChange={setWindowId}
+                    options={windows.map((w) => ({
+                      value: String(w.id),
+                      label: windowName(w),
+                      hint: `${Math.round(w.width * w.scale)} × ${Math.round(w.height * w.scale)}`,
+                    }))}
+                  />
+                )}
               </div>
             </Field>
             <Field label="Quality" hint={estimate ? `${estimate.width} × ${estimate.height}, 30 fps` : undefined}>
@@ -296,6 +370,14 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
             </Field>
             <Field label="Preview">
               <CameraPreview camera={camera} />
+            </Field>
+            <Field label="Computer sound" hint={systemSupported ? undefined : "Needs macOS 13 or newer"}>
+              <Switch
+                label="Record the computer's sound"
+                checked={systemAudio}
+                disabled={!systemSupported}
+                onChange={setSystemAudio}
+              />
             </Field>
           </div>
           <div className="setup-footer">
@@ -400,8 +482,10 @@ function RecentRow({
           <span className="recent-meta">
             {formatDuration(session.elapsed_s)} · {size}
             {session.screen?.region ? " · Region" : ""}
+            {session.screen?.window ? " · Window" : ""}
             {session.camera ? " · Camera" : ""}
             {session.mic ? " · Microphone" : ""}
+            {session.system_audio ? " · Computer sound" : ""}
             {session.state === "recovered" ? " · Recovered" : ""}
           </span>
         </span>

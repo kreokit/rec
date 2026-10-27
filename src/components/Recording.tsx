@@ -69,10 +69,11 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
           {formatDuration(live?.status.elapsed ?? 0)}
         </div>
         <div className="rec-meta">
-          {current.screen?.display}
+          {current.screen?.window ?? current.screen?.display}
           {current.screen?.region ? " (region)" : ""} · {current.screen?.width} × {current.screen?.height}
           {current.camera ? ` · ${current.camera.name}` : ""}
           {current.mic ? ` · ${current.mic}` : " · No microphone"}
+          {current.system_audio ? " · Computer sound" : ""}
         </div>
         {current.mic && (
           <div className="rec-level">
@@ -105,8 +106,9 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
         )}
 
         <p className="rec-hint">
-          This window is recorded too while it's on screen. Minimize it (⌘M) if you don't want it in the video, and
-          click KreoKit Rec in the Dock to come back.
+          {current.screen?.window
+            ? "Only the chosen window is recorded, even when others cover it. If it closes, the recording keeps its last picture."
+            : "This window is recorded too while it's on screen. Minimize it (⌘M) if you don't want it in the video, and click KreoKit Rec in the Dock to come back."}
         </p>
       </main>
     </div>
