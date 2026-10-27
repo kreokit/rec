@@ -119,3 +119,60 @@ reads "Needs macOS 13 or newer"). Checked by friends with item 9 of `docs/manual
 - **5 camera frames dropped at the start:** the ~28 slots filled with the camera's first
   picture overflowed the encoder's queue while it was starting. Repeated pictures don't
   count against the queue any more (0 dropped afterwards).
+
+# M3 part B: Windows and Linux on CI (2026-10-27)
+
+The dev Mac can't run Windows or Linux; these are CI's results (GitHub runners: Windows
+Server 2022/2025 VM, Ubuntu 24.04 VM; no GPU, no camera, no audio devices). Real-device
+numbers come from the test version's Tests screen on friends' computers (below).
+
+**The Rust recorder** (`src/pipeline.rs`, the macOS recorder's rules) **with our LGPL FFmpeg
+sidecar** (`src/encoder.rs`: raw pictures/PCM over stdin → fragmented MP4) passes the whole
+recorder suite on both, with the synthetic sources (`src/synthetic.rs`, the same pattern as
+recorder.m): every slot a new picture, picture and sound within a frame, pauses, still
+periods, a late camera/mic start, a closed window, the region cut-out, the computer sound.
+The same suite also passes on the dev Mac with `--features pipe-recorder` (VideoToolbox and
+OpenH264 through FFmpeg).
+
+| | Windows (Media Foundation `h264_mf`) | Linux (OpenH264) | dev Mac, pipe recorder (OpenH264) |
+|---|---|---|---|
+| Simulated hour (drift < 1 frame, no stale frames, ≥ 3598 markers) | passed, 144 s | passed | passed, 201 s |
+| kill -9 (each file ≤ 3 s short on CI, ≤ 2 s on real computers) | passed | passed | 0.09 s per file |
+| kill -9 through sessions + recovery | passed | passed | 0.31 s |
+
+Killing Rec doesn't stop the FFmpeg processes: they see their input end and finish the file,
+so only what was still queued in Rec (≤ 80 ms + the queue) is lost.
+
+**Real capture on CI:**
+- Windows: Windows.Graphics.Capture records the VM's display and a region of it (only the
+  region is copied off the GPU), and DXGI duplication records the display: 3 s each, the
+  right size, nothing dropped. Window listing works. Cameras, microphones and the computer
+  sound need a real PC.
+- Linux: under Xvfb without a ScreenCast portal, x11grab records a region of the X screen
+  (3 s, every slot a new picture). The portal + PipeWire path can't be tried on CI (M1: the
+  headless compositor offers no format); it needs a real GNOME/KDE desktop.
+
+**Choices made while building (to confirm on friends' computers):**
+- Picture timestamps: Windows.Graphics.Capture's SystemRelativeTime and DXGI's
+  LastPresentTime are on the performance counter, the host clock there; Linux portal frames
+  are stamped when they arrive (CLOCK_MONOTONIC); cameras (Media Foundation, V4L2) are tied
+  to the host clock at their first picture unless their clock already is it.
+- Microphones on Windows go through cpal's WASAPI (like the computer sound) instead of Media
+  Foundation: one sound path, the same performance-counter timestamps.
+- Sound from devices that don't run at 48 kHz is resampled linearly (fine for speech; a
+  device at 48 kHz, the usual mix format, isn't resampled).
+- Linux cameras: NV12 or YUYV only; cameras that offer only MJPEG aren't used yet.
+- Linux needs PipeWire 0.3.53+ (cpal's PipeWire host): Ubuntu 24.04, Fedora 36+, Debian 12
+  and newer. The Linux builds are made on Ubuntu 24.04.
+- Linux with the portal: the system's dialog chooses the display or window; a region isn't
+  offered there yet (the setup screen says so).
+
+## The test version for friends
+
+"KreoKit Rec Test" (`com.kreokit.rec.test`, the "Test version" workflow) opens on a Tests
+screen that runs the manual checklist by clicking (`docs/manual-checklist.md`) and saves
+one results file. Results go here, per computer, before the M6 release:
+
+| Computer | Tests | Result |
+|---|---|---|
+| (none yet) | | |
