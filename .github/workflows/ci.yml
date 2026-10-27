@@ -111,8 +111,8 @@ jobs:
         shell: bash
         run: |
           python scripts/fetch_ffmpeg.py x86_64-pc-windows-msvc
-          echo "KREOKIT_FFMPEG=$PWD/src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe" >> "$GITHUB_ENV"
-          echo "KREOKIT_FFPROBE=$PWD/src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe" >> "$GITHUB_ENV"
+          echo 'KREOKIT_FFMPEG=${{ github.workspace }}\src-tauri\binaries\ffmpeg-x86_64-pc-windows-msvc.exe' >> "$GITHUB_ENV"
+          echo 'KREOKIT_FFPROBE=${{ github.workspace }}\src-tauri\binaries\ffprobe-x86_64-pc-windows-msvc.exe' >> "$GITHUB_ENV"
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --locked

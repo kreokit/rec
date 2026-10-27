@@ -5,6 +5,7 @@ mod check;
 mod disk;
 mod encoder;
 mod ffmpeg;
+mod jpeg;
 mod native;
 mod pipeline;
 mod preview;

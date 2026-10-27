@@ -135,8 +135,5 @@ pub fn jpeg(p: &Picture, width: u32, height: u32) -> Vec<u8> {
             rgb.extend([r, g, b]);
         }
     }
-    let mut out = Vec::new();
-    let encoder = jpeg_encoder::Encoder::new(&mut out, 75);
-    let _ = encoder.encode(&rgb, w as u16, h as u16, jpeg_encoder::ColorType::Rgb);
-    out
+    crate::jpeg::encode(&rgb, w as u32, h as u32, 75)
 }
