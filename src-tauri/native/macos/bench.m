@@ -10,8 +10,9 @@
 //       nothing changed (unchanged), or missed a change (stale). --camera also records the
 //       default camera at 720p (the long run of screen + camera + mic); the process's CPU
 //       use is reported too. --region records only a region around the window (24 points
-//       on each side), so reading the counter back checks that the crop is the right part
-//       of the screen.
+//       on each side) at the display's own pixels, as the app does (the whole display is
+//       captured at full size and the region cut out), so reading the counter back checks
+//       that the crop is the right part of the screen.
 //   --bench sync --out DIR [--seconds 45]
 //       The tap test for sound against picture. The window waits in front of everything
 //       until the user clicks it and presses space; that first press starts the
@@ -218,9 +219,11 @@ int kr_bench_main(int argc, const char **argv) {
             CGFloat top = NSMaxY(screen.frame) - NSMaxY(frame);
             CGFloat left = frame.origin.x - screen.frame.origin.x;
             if (region) {
-                // Same output pixels per point as the whole display, so the squares stay 16 px.
+                // At the display's own pixels per point, as sessions.rs's source_size does
+                // for a region smaller than 1080p.
                 CGFloat m = 24;
                 area = CGRectMake(left - m, top - m, frame.size.width + 2 * m, frame.size.height + 2 * m);
+                scale = screen.backingScaleFactor;
                 w = (int)(area.size.width * scale) & ~1;
                 h = (int)(area.size.height * scale) & ~1;
                 info[@"width"] = @(w);
