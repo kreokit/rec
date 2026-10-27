@@ -1,6 +1,7 @@
 # Tests on every push and pull request: Linux (everything, plus licence checks), macOS
 # and Windows (frontend build + Rust tests, which also prove the app links on each
-# platform).
+# platform). On Linux and Windows the recorder tests record the synthetic sources through
+# our LGPL FFmpeg sidecar, the release encoders (src/encoder.rs).
 name: CI
 
 on:
@@ -32,11 +33,16 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Linux packages for Tauri, and FFmpeg for the probe tests
+      - name: Linux packages for Tauri
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev ffmpeg
+            libayatana-appindicator3-dev librsvg2-dev
+      - name: Our LGPL FFmpeg for the recorder and probe tests
+        run: |
+          python scripts/fetch_ffmpeg.py x86_64-unknown-linux-gnu
+          echo "KREOKIT_FFMPEG=$PWD/src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+          echo "KREOKIT_FFPROBE=$PWD/src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
@@ -96,6 +102,17 @@ jobs:
       - name: FFmpeg for the recorder tests
         if: runner.os == 'macOS'
         run: brew install ffmpeg
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.12"
+      - name: Our LGPL FFmpeg for the recorder tests
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          python scripts/fetch_ffmpeg.py x86_64-pc-windows-msvc
+          echo "KREOKIT_FFMPEG=$PWD/src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe" >> "$GITHUB_ENV"
+          echo "KREOKIT_FFPROBE=$PWD/src-tauri/binaries/ffprobe-x86_64-pc-windows-msvc.exe" >> "$GITHUB_ENV"
       - name: Rust tests
         working-directory: src-tauri
         run: cargo test --locked
@@ -109,3 +126,12 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: src-tauri
         run: cargo test --locked --features bench "bench::"
+      # The Windows/Linux recorder (src/pipeline.rs) on macOS too, through FFmpeg.
+      - name: The Rust recorder's tests on macOS
+        if: runner.os == 'macOS'
+        working-directory: src-tauri
+        run: cargo test --locked --features pipe-recorder "native::"
+      - name: An hour on the synthetic sources' clock (Windows)
+        if: runner.os == 'Windows'
+        working-directory: src-tauri
+        run: cargo test --locked -- --ignored --exact native::tests::simulated_hour --nocapture

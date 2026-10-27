@@ -1,5 +1,7 @@
 //! The system recorder: on macOS the Objective-C recorder in `native/macos` (its rules are
-//! in recorder.h); Windows and Linux follow in milestone 3.
+//! in recorder.h); on Windows and Linux the same rules in Rust (pipeline.rs), writing
+//! through our FFmpeg (encoder.rs). The `pipe-recorder` feature (development) records with
+//! the Rust recorder on macOS too, so its tests run on the dev Mac.
 
 use std::path::PathBuf;
 
@@ -315,12 +317,14 @@ mod macos {
     }
 
     /// A running recording. Dropping it without [`Recorder::stop`] stops it too.
+    #[cfg_attr(feature = "pipe-recorder", allow(dead_code))]
     pub struct Recorder(*mut c_void);
 
     // The native recorder serializes every call on its own queue.
     unsafe impl Send for Recorder {}
     unsafe impl Sync for Recorder {}
 
+    #[cfg_attr(feature = "pipe-recorder", allow(dead_code))]
     impl Recorder {
         pub fn start(config: &RecordConfig) -> Result<Recorder, String> {
             let dir = CString::new(config.dir.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
@@ -550,31 +554,79 @@ mod macos {
     }
 }
 
+#[cfg(any(not(target_os = "macos"), feature = "pipe-recorder"))]
+pub use portable::Recorder;
+
+/// The Rust recorder (pipeline.rs) with its sources: the synthetic ones, or the system's.
+#[cfg(any(not(target_os = "macos"), feature = "pipe-recorder"))]
+mod portable {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::encoder::{PixelFormat, VideoInput};
+    use crate::pipeline::{self, Core, Inputs};
+
+    /// A running recording. Dropping it without [`Recorder::stop`] stops it too.
+    pub struct Recorder(pipeline::Recorder);
+
+    impl Recorder {
+        pub fn start(config: &RecordConfig) -> Result<Recorder, String> {
+            let Some(flags) = config.synthetic else {
+                return Err(NOT_YET.into());
+            };
+            let layout = crate::synthetic::screen_layout(config);
+            let nv12 = |(width, height)| VideoInput {
+                width,
+                height,
+                format: PixelFormat::Nv12,
+            };
+            let inputs = Inputs {
+                screen: layout.map(|(w, h, _)| nv12((w, h))),
+                crop: layout.and_then(|(_, _, crop)| crop),
+                camera: config.camera.as_ref().map(|c| nv12((c.width, c.height))),
+            };
+            let core: Arc<Core> = Core::new(config, inputs)?;
+            let generator = crate::synthetic::start(core.clone(), config, flags);
+            let pictures = config.screen.is_some() || config.camera.is_some();
+            Ok(Recorder(pipeline::Recorder::new(
+                core,
+                vec![Box::new(generator)],
+                pictures,
+            )))
+        }
+
+        pub fn pause(&self) {
+            self.0.pause()
+        }
+
+        pub fn resume(&self) {
+            self.0.resume()
+        }
+
+        pub fn status(&self) -> Status {
+            self.0.status()
+        }
+
+        /// Stops and finishes the files. The error (a source or file failed during the
+        /// recording) comes with the final status: the files are kept either way.
+        pub fn stop(self) -> (Status, Option<String>) {
+            self.0.stop()
+        }
+    }
+
+    const NOT_YET: &str =
+        "Recording the real screen on this system arrives in the next test version of KreoKit Rec.";
+}
+
 #[cfg(not(target_os = "macos"))]
 pub use other::*;
 
-/// Windows and Linux: recording arrives in milestone 3.
+/// Windows and Linux: devices and permissions (the system capture follows in M3).
 #[cfg(not(target_os = "macos"))]
 mod other {
     use super::*;
 
-    const NOT_YET: &str = "Recording on this system arrives in a later version of KreoKit Rec. For now it records on macOS.";
-
-    pub struct Recorder;
-
-    impl Recorder {
-        pub fn start(_config: &RecordConfig) -> Result<Recorder, String> {
-            Err(NOT_YET.into())
-        }
-        pub fn pause(&self) {}
-        pub fn resume(&self) {}
-        pub fn status(&self) -> Status {
-            Status::default()
-        }
-        pub fn stop(self) -> (Status, Option<String>) {
-            (Status::default(), None)
-        }
-    }
+    const NOT_YET: &str = "This arrives in the next test version of KreoKit Rec on this system.";
 
     pub fn screen_access() -> Access {
         Access::Allowed
@@ -617,16 +669,27 @@ mod other {
         0.0
     }
     pub fn monitor_stop() {}
-    pub fn preview_start(_id: &str, _w: u32, _h: u32, _synthetic: bool) -> Result<(), String> {
-        Err(NOT_YET.into())
+    pub fn preview_start(
+        _id: &str,
+        width: u32,
+        height: u32,
+        synthetic: bool,
+    ) -> Result<(), String> {
+        if synthetic {
+            crate::preview::start_synthetic(width, height)
+        } else {
+            Err(NOT_YET.into())
+        }
     }
-    pub fn preview_frame(_seq: &mut u64) -> Option<Vec<u8>> {
-        None
+    pub fn preview_frame(seq: &mut u64) -> Option<Vec<u8>> {
+        crate::preview::frame(seq)
     }
-    pub fn preview_stop() {}
+    pub fn preview_stop() {
+        crate::preview::stop()
+    }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 pub(crate) mod tests {
     use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -690,6 +753,16 @@ pub(crate) mod tests {
         std::env::var_os("CI").is_some()
     }
 
+    /// The H.264 profiles this system's recorder may write: High from VideoToolbox, the
+    /// encoder's accepted ones through FFmpeg (encoder.rs).
+    fn profiles() -> &'static [&'static str] {
+        if cfg!(any(not(target_os = "macos"), feature = "pipe-recorder")) {
+            crate::encoder::accepted_profiles(crate::encoder::video_encoder().unwrap())
+        } else {
+            &["High"]
+        }
+    }
+
     /// The synthetic camera's size in the tests.
     pub const CAMERA_W: u32 = 320;
     pub const CAMERA_H: u32 = 180;
@@ -742,6 +815,8 @@ pub(crate) mod tests {
         report
     }
 
+    // Windows and Linux list their displays with the system capture (M3 steps 10-11).
+    #[cfg(target_os = "macos")]
     #[test]
     fn lists_the_displays() {
         // The JSON must parse (a 1 instead of true for "main" once emptied the list).
@@ -844,9 +919,10 @@ pub(crate) mod tests {
         // The encoder settings the export relies on.
         let screen = crate::probe::probe(&dir.join("screen.mp4")).unwrap();
         let video = screen.video().unwrap();
-        assert_eq!(
-            (video.codec.as_str(), video.profile.as_deref()),
-            ("h264", Some("High"))
+        assert_eq!(video.codec, "h264");
+        assert!(
+            profiles().contains(&video.profile.as_deref().unwrap_or("")),
+            "{video:?}"
         );
         assert_eq!(video.pix_fmt.as_deref(), Some("yuv420p"));
         assert_eq!(
@@ -856,9 +932,10 @@ pub(crate) mod tests {
         assert_eq!((video.width, video.height), (Some(640), Some(360)));
         let camera = crate::probe::probe(&dir.join("camera.mp4")).unwrap();
         let cv = camera.video().unwrap();
-        assert_eq!(
-            (cv.codec.as_str(), cv.profile.as_deref()),
-            ("h264", Some("High"))
+        assert_eq!(cv.codec, "h264");
+        assert!(
+            profiles().contains(&cv.profile.as_deref().unwrap_or("")),
+            "{cv:?}"
         );
         assert_eq!((cv.width, cv.height), (Some(CAMERA_W), Some(CAMERA_H)));
         let mic = crate::probe::probe(&dir.join("mic.mp4")).unwrap();

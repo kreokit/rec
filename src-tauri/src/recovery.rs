@@ -264,7 +264,6 @@ mod tests {
     }
 
     /// Run by `recovers_after_kill_9` in a child process: records until killed.
-    #[cfg(target_os = "macos")]
     #[test]
     #[ignore]
     fn kill_child() {
@@ -289,7 +288,6 @@ mod tests {
 
     /// The whole path: the real recorder (synthetic sources) and session code in a child
     /// process, `kill -9` after about 6 s, then recovery as at the next start.
-    #[cfg(target_os = "macos")]
     #[test]
     fn recovers_after_kill_9() {
         let _timing = crate::native::tests::alone();
@@ -321,8 +319,8 @@ mod tests {
             "recovered {:.2} s of about {before:.2} s",
             session.elapsed_s
         );
-        // CI Macs are VMs without a hardware encoder: the writer runs behind there
-        // (docs/capture-research.md), so up to 3 s; real Macs must stay within 2 s.
+        // CI's VMs have no hardware encoder: the writer runs behind there
+        // (docs/capture-research.md), so up to 3 s; real computers must stay within 2 s.
         let limit = if std::env::var_os("CI").is_some() {
             3.0
         } else {

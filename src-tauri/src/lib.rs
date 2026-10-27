@@ -3,11 +3,15 @@ mod awake;
 mod bench;
 mod check;
 mod disk;
+mod encoder;
 mod ffmpeg;
 mod native;
+mod pipeline;
+mod preview;
 mod probe;
 mod recovery;
 mod sessions;
+mod synthetic;
 #[cfg(any(test, feature = "bench"))]
 mod testpattern;
 
@@ -336,7 +340,13 @@ fn estimate(
     Estimate {
         width: w,
         height: h,
-        bytes_per_minute: sessions::bytes_per_minute(w, h, camera, mic, system_audio.unwrap_or(false)),
+        bytes_per_minute: sessions::bytes_per_minute(
+            w,
+            h,
+            camera,
+            mic,
+            system_audio.unwrap_or(false),
+        ),
         free_bytes: disk::free_bytes(&root),
     }
 }
