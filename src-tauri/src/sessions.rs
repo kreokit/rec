@@ -632,6 +632,25 @@ pub mod tests {
         }
     }
 
+    /// A camera track like `make_tracks`' screen, `seconds` long.
+    pub fn make_camera(dir: &Path, seconds: f64, fragmented: bool) {
+        let ffmpeg = crate::ffmpeg::locate("ffmpeg").unwrap();
+        let frag: &[&str] = if fragmented {
+            &["-movflags", "frag_keyframe+empty_moov+default_base_moof"]
+        } else {
+            &[]
+        };
+        let video = Command::new(&ffmpeg)
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("testsrc2=size=320x180:rate=30:duration={seconds}"))
+            .args(["-c:v", "mpeg4", "-g", "30"])
+            .args(frag)
+            .arg(dir.join("camera.mp4"))
+            .status()
+            .unwrap();
+        assert!(video.success());
+    }
+
     impl Backend for FakeBackend {
         fn start(&self, config: &RecordConfig) -> Result<Box<dyn Capture>, String> {
             self.starts.fetch_add(1, Ordering::SeqCst);

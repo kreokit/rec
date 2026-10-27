@@ -2,7 +2,7 @@
 //! finishing) when the app starts was cut off by a crash, a forced quit or a power loss.
 //! Its fragmented MP4 tracks play up to the last complete fragment (≤ 1-2 s lost); recovery
 //! rewrites each into a normal MP4 (stream copy, the index at the front, the half-written
-//! last frame dropped), cuts the longer track to the shorter one (they were cut off at
+//! last frame dropped), cuts every track to the shortest one (they were cut off at
 //! different fragments) and checks the result like a normal stop.
 
 use std::fs;
@@ -82,23 +82,26 @@ pub fn recover(recordings: &Recordings, id: &str) -> Result<Session, String> {
         return Ok(session);
     }
     let mut any = false;
-    for name in ["screen.mp4", "mic.mp4"] {
+    for (name, _, _) in check::TRACKS {
         any |= remux_track(&dir.join(name), None)?;
     }
     let fps = session.screen.as_ref().map_or(30, |s| s.fps);
     let mut result = check::check(&dir, None, fps);
-    // Both tracks end where the shorter one does.
-    if let (Some(screen), Some(mic)) = (&result.screen, &result.mic) {
-        let (screen_end, mic_end) = (
-            screen.start_s + screen.duration_s,
-            mic.start_s + mic.duration_s,
-        );
-        let end = screen_end.min(mic_end);
-        for (name, track_end) in [("screen.mp4", screen_end), ("mic.mp4", mic_end)] {
-            if track_end > end + 1.0 / fps as f64 {
-                remux_track(&dir.join(name), Some(end))?;
-            }
+    // Every track ends where the shortest one does.
+    let ends =
+        check::TRACKS.map(|(name, _, _)| (name, result.get(name).map(check::TrackCheck::end_s)));
+    let end = ends
+        .iter()
+        .filter_map(|(_, e)| *e)
+        .fold(f64::INFINITY, f64::min);
+    let mut cut = false;
+    for (name, track_end) in ends {
+        if track_end.is_some_and(|e| e > end + 1.0 / fps as f64) {
+            remux_track(&dir.join(name), Some(end))?;
+            cut = true;
         }
+    }
+    if cut {
         result = check::check(&dir, None, fps);
     }
     if any && result.playable() {
@@ -119,7 +122,7 @@ pub fn recover(recordings: &Recordings, id: &str) -> Result<Session, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sessions::tests::{fake, make_tracks, temp_root};
+    use crate::sessions::tests::{fake, make_camera, make_tracks, temp_root};
     use crate::sessions::{ScreenInfo, Session};
 
     fn crashed(root: &Path, id: &str, elapsed: f64) -> std::path::PathBuf {
@@ -195,6 +198,27 @@ mod tests {
     /// Needs ffmpeg: `cargo test -- --ignored`.
     #[test]
     #[ignore]
+    fn cuts_every_track_to_the_shortest() {
+        let root = temp_root("recover-camera");
+        let dir = crashed(&root, "2026-10-27-143400", 6.0);
+        make_tracks(&dir, 6.0, true, true);
+        // The camera's writer was a fragment behind when the app was killed.
+        make_camera(&dir, 4.0, true);
+        let recordings = fake(&root);
+        let session = recover(&recordings, "2026-10-27-143400").unwrap();
+        assert_eq!(session.state, State::Recovered, "{session:?}");
+        let check = session.check.as_ref().unwrap();
+        assert!(check.problems.is_empty(), "{check:?}");
+        for t in check.tracks() {
+            assert!((t.end_s() - 4.0).abs() <= 1.0 / 30.0 + 0.03, "{check:?}");
+        }
+        assert!(check.camera.is_some() && check.mic.is_some(), "{check:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Needs ffmpeg: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
     fn reports_when_nothing_was_saved() {
         let root = temp_root("recover-empty");
         let dir = crashed(&root, "2026-10-27-143300", 0.4);
@@ -229,6 +253,10 @@ mod tests {
         let mut options = crate::sessions::tests::options();
         options.display_width = 640;
         options.display_height = 360;
+        options.camera_id = Some(String::new());
+        options.camera_name = Some("Test camera".into());
+        options.camera_width = 640;
+        options.camera_height = 360;
         recordings
             .start_with(&options, Some(crate::native::Synthetic::default()))
             .unwrap();
@@ -280,6 +308,7 @@ mod tests {
         assert!(lost <= limit, "lost {lost:.2} s: {session:?}");
         let check = session.check.unwrap();
         assert!(check.problems.is_empty(), "{check:?}");
+        assert!(check.screen.is_some() && check.camera.is_some() && check.mic.is_some());
         let _ = fs::remove_dir_all(&root);
     }
 }

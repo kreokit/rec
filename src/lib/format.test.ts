@@ -14,9 +14,12 @@ const session = (over: Partial<Session> = {}): Session => ({
   check: {
     duration_s: 725,
     screen: { codec: "h264", start_s: 0, duration_s: 725, packets: 21750 },
+    camera: null,
     mic: { codec: "aac", start_s: 0, duration_s: 725.01, packets: 33985 },
     start_offset_ms: 0,
     end_offset_ms: 10,
+    camera_start_offset_ms: null,
+    camera_end_offset_ms: null,
     recorder: null,
     problems: [],
     notes: [],

@@ -76,9 +76,12 @@ export interface TrackCheck {
 export interface Check {
   duration_s: number;
   screen: TrackCheck | null;
+  camera: TrackCheck | null;
   mic: TrackCheck | null;
   start_offset_ms: number | null;
   end_offset_ms: number | null;
+  camera_start_offset_ms: number | null;
+  camera_end_offset_ms: number | null;
   recorder: Status | null;
   problems: string[];
   notes: string[];
