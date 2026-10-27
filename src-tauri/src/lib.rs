@@ -9,6 +9,7 @@ mod encoder;
 mod ffmpeg;
 #[cfg(feature = "bench")]
 mod fieldtest;
+mod finish;
 /// Releases have no Tests screen: its commands only answer that.
 #[cfg(not(feature = "bench"))]
 mod fieldtest {
@@ -643,6 +644,38 @@ fn show_recording(app: AppHandle, id: String) -> Result<(), String> {
         .map_err(|e| format!("The folder didn't open ({e}). Try again, or Report a problem."))
 }
 
+/// One recording, for Finish.
+#[tauri::command]
+async fn recording(app: AppHandle, id: String) -> Result<Session, String> {
+    blocking(move || {
+        sessions::read_session(&recordings(&app).dir(&id)?).ok_or_else(|| {
+            "This recording no longer exists. Go back to Home and choose another one.".into()
+        })
+    })
+    .await
+}
+
+/// The recording's Finish choices (saved ones, or the first choices).
+#[tauri::command]
+async fn finish_settings(app: AppHandle, id: String) -> Result<finish::Settings, String> {
+    blocking(move || {
+        let dir = recordings(&app).dir(&id)?;
+        let session = sessions::read_session(&dir)
+            .ok_or("This recording no longer exists. Go back to Home and choose another one.")?;
+        Ok(finish::read(&dir, &session))
+    })
+    .await
+}
+
+#[tauri::command]
+async fn save_finish_settings(
+    app: AppHandle,
+    id: String,
+    settings: finish::Settings,
+) -> Result<(), String> {
+    blocking(move || finish::write(&recordings(&app).dir(&id)?, &settings)).await
+}
+
 #[tauri::command]
 async fn pending_recoveries(app: AppHandle) -> Result<Vec<Session>, String> {
     blocking(move || Ok(recovery::pending(&recordings(&app)))).await
@@ -716,6 +749,9 @@ pub fn run() {
             remove_from_recent,
             delete_recording,
             show_recording,
+            recording,
+            finish_settings,
+            save_finish_settings,
             pending_recoveries,
             recover_recording,
             quit_app,

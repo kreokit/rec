@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
+import { Finish } from "./components/Finish";
 import { Home } from "./components/Home";
 import { Permissions } from "./components/Permissions";
 import { Recording } from "./components/Recording";
 import { TestScreen } from "./components/TestScreen";
 import { setOpenTests } from "./components/TopBar";
 import { Permissions as PermissionState, Session, api } from "./lib/api";
-import { checkSummary, formatDuration } from "./lib/format";
+import { formatDuration } from "./lib/format";
 import { ToastRegion, toast } from "./ui";
 
 type Screen =
@@ -13,6 +14,7 @@ type Screen =
   | { name: "permissions"; permissions: PermissionState }
   | { name: "home"; micAllowed: boolean }
   | { name: "recording"; session: Session }
+  | { name: "finish"; session: Session }
   | { name: "tests" };
 
 /** The app: permissions first if needed, then Home ⇄ Recording. */
@@ -48,22 +50,28 @@ function App() {
     });
   }, []);
 
+  /** After Stop: straight to Finish (it shows the check); a failed recording goes Home. */
   const finished = (session: Session) => {
-    const { text, ok } = checkSummary(session);
-    toast(
-      session.state === "failed" ? text : `Recording saved (${formatDuration(session.elapsed_s)}). ${text}.`,
-      ok ? "success" : "error",
-    );
-    home();
+    if (session.state === "failed") {
+      toast(session.error ?? "Nothing was recorded.", "error");
+      return home();
+    }
+    toast(`Recording saved (${formatDuration(session.elapsed_s)}).`, "success");
+    setScreen({ name: "finish", session });
   };
 
   return (
     <>
       {screen.name === "permissions" && <Permissions initial={screen.permissions} onDone={home} />}
       {screen.name === "home" && (
-        <Home micAllowed={screen.micAllowed} onStart={(session) => setScreen({ name: "recording", session })} />
+        <Home
+          micAllowed={screen.micAllowed}
+          onStart={(session) => setScreen({ name: "recording", session })}
+          onFinish={(session) => setScreen({ name: "finish", session })}
+        />
       )}
       {screen.name === "recording" && <Recording session={screen.session} onDone={finished} />}
+      {screen.name === "finish" && <Finish session={screen.session} onHome={home} />}
       {screen.name === "tests" && <TestScreen onApp={home} />}
       <ToastRegion />
     </>

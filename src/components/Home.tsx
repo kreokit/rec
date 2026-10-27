@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Trash2, TriangleAlert, Video } from "lucide-react";
+import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Scissors, Trash2, TriangleAlert, Video } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Camera, Display, Estimate, Mic as MicDevice, Options, Os, Region, Session, Window, WindowChoice, api } from "../lib/api";
 import { checkSummary, clockTime, formatBytes, formatDuration, formatRoom, recordingTitle } from "../lib/format";
@@ -43,7 +43,16 @@ function windowChoice(w: Window): WindowChoice {
 }
 
 /** Home: recover a cut-off recording, set up and start a new one, or find a recent one. */
-export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (session: Session) => void }) {
+export function Home({
+  micAllowed,
+  onStart,
+  onFinish,
+}: {
+  micAllowed: boolean;
+  onStart: (session: Session) => void;
+  /** Opens a recording in Finish. */
+  onFinish: (session: Session) => void;
+}) {
   const [displays, setDisplays] = useState<Display[]>([]);
   const [mics, setMics] = useState<MicDevice[]>([]);
   const [displayId, setDisplayId] = useState(last.displayId);
@@ -430,6 +439,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
                   key={session.id}
                   session={session}
                   onShow={() => void api.showRecording(session.id).catch((e) => toast(String(e), "error"))}
+                  onFinish={() => onFinish(session)}
                   onRemove={() => setRemoving(session)}
                   onDelete={() => setDeleting(session)}
                 />
@@ -464,17 +474,25 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
 function RecentRow({
   session,
   onShow,
+  onFinish,
   onRemove,
   onDelete,
 }: {
   session: Session;
   onShow: () => void;
+  onFinish: () => void;
   onRemove: () => void;
   onDelete: () => void;
 }) {
   const playable = session.state !== "failed";
   const items = (): MenuEntry[] => [
-    ...(playable ? [{ label: "Show in Finder", icon: FolderOpen, onSelect: onShow }, "separator" as const] : []),
+    ...(playable
+      ? [
+          { label: "Finish & export", icon: Scissors, onSelect: onFinish },
+          { label: "Show in Finder", icon: FolderOpen, onSelect: onShow },
+          "separator" as const,
+        ]
+      : []),
     { label: "Remove from Recent…", onSelect: onRemove },
     { label: "Delete recording…", icon: Trash2, onSelect: onDelete },
   ];
@@ -483,7 +501,7 @@ function RecentRow({
   const size = session.screen ? `${session.screen.width} × ${session.screen.height}` : "Sound only";
   return (
     <li className="recent-row" onContextMenu={onContextMenu}>
-      <button type="button" className="recent-open" onClick={playable ? onShow : undefined} title="Show in Finder">
+      <button type="button" className="recent-open" onClick={playable ? onFinish : undefined} title="Finish & export">
         <span className="recent-icon">
           {session.screen ? (
             <Video size={18} strokeWidth={ICON_STROKE} aria-hidden />
@@ -507,6 +525,11 @@ function RecentRow({
           {!ok && <TriangleAlert size={12} strokeWidth={2} aria-hidden />} {text}
         </span>
       </button>
+      {playable && (
+        <Button variant="secondary" size="sm" onClick={onFinish}>
+          Finish & export
+        </Button>
+      )}
       <Menu buttonLabel={`More for ${recordingTitle(session)}`} icon={Ellipsis} variant="ghost" align="end" items={items()} />
       {menu}
     </li>

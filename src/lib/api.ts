@@ -196,6 +196,30 @@ export interface Options {
   system_audio: boolean;
 }
 
+/** Finish choices (src-tauri/src/finish.rs). */
+export type Layout = "screen" | "bubble" | "camera";
+export type BubbleShape = "circle" | "rounded";
+export type BubbleSize = "small" | "medium" | "large";
+export type Loudness = "social" | "tutorial" | "keep";
+
+export interface Bubble {
+  shape: BubbleShape;
+  size: BubbleSize;
+  /** Fractions (0–1) of the room inside the margin: (1, 1) is bottom right. */
+  x: number;
+  y: number;
+}
+
+export interface FinishSettings {
+  start_s: number;
+  /** null: to the end. */
+  end_s: number | null;
+  layout: Layout;
+  bubble: Bubble;
+  clean_voice: boolean;
+  loudness: Loudness;
+}
+
 /** The test version's tests (src-tauri/src/fieldtest.rs). */
 export type FieldTest = "screen" | "region" | "window" | "sync" | "camera" | "sound";
 
@@ -277,6 +301,10 @@ export const api = {
   removeFromRecent: (id: string) => invoke<void>("remove_from_recent", { id }),
   deleteRecording: (id: string) => invoke<void>("delete_recording", { id }),
   showRecording: (id: string) => invoke<void>("show_recording", { id }),
+  recording: (id: string) => invoke<Session>("recording", { id }),
+  finishSettings: (id: string) => invoke<FinishSettings>("finish_settings", { id }),
+  saveFinishSettings: (id: string, settings: FinishSettings) =>
+    invoke<void>("save_finish_settings", { id, settings }),
   pendingRecoveries: () => invoke<Session[]>("pending_recoveries"),
   recoverRecording: (id: string) => invoke<Session>("recover_recording", { id }),
   /** null in releases (no Tests screen). */
