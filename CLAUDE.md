@@ -1,7 +1,7 @@
 # KreoKit Rec: build spec for Claude Code
 
 Read this before every task. It is the source of truth for scope and architecture.
-**Status (2026-10-27):** M1 done (`docs/capture-research.md`). **M2 done**: screen + mic on macOS (native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen); synthetic tests (simulated hour, kill -9 recovery) and real-device measurements (`docs/m2-results.md`: 99.86 % fresh at 60→30 fps, sync within a frame plus ≈32 ms display delay, crash loss 0.15–0.4 s); the user tried the test app and everything worked. **Next: M3** (camera + computer sound + window/region + Windows/Linux): plan shown to the user before coding. See "Capture choices" and "Testing on the dev Mac" below.
+**Status (2026-10-27):** M1 done (`docs/capture-research.md`). **M2 done**: screen + mic on macOS (native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen); synthetic tests (simulated hour, kill -9 recovery) and real-device measurements (`docs/m2-results.md`: 99.86 % fresh at 60→30 fps, sync within a frame plus ≈32 ms display delay, crash loss 0.15–0.4 s); the user tried the test app and everything worked. **Next: M3** (camera + computer sound + window/region + Windows/Linux): plan in `docs/m3-plan.md`, waiting for the user's OK. See "Capture choices" and "Testing on the dev Mac" below.
 App #5 of the KreoKit suite. Published: KreoKit Captions (`kreokit/captions`), Cutout (`kreokit/cutout`), Clips (`kreokit/clips`), Voice (`kreokit/voice`). KreoKit Design was dropped and archived. Reuse the published apps wherever possible.
 
 ## What we are building
@@ -63,7 +63,7 @@ Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`.
 | **Windows 10/11** | Windows.Graphics.Capture (default update interval on older builds), DXGI duplication as fallback | Media Foundation | WASAPI loopback (cpal) | to measure in M3 on a real PC |
 | **Linux** | xdg-desktop-portal ScreenCast + PipeWire (ashpd, pipewire); x11grab only on X11 without a portal | V4L2/PipeWire | PipeWire capture-sink via cpal first; PulseAudio monitor only without PipeWire (cookie-less clients are rejected by pipewire-pulse) | OpenH264 / VA-API in our LGPL FFmpeg |
 
-- Native capture code on every system, never FFmpeg input devices (gdigrab can't hold 30 fps; avfoundation has no SCK/window exclusion). FFmpeg is for Finish/export only.
+- Native capture code on every system, never FFmpeg input devices (gdigrab can't hold 30 fps; avfoundation has no SCK/window exclusion; x11grab only as the X11 fallback above). On Linux (and Windows, if measured fine) our LGPL FFmpeg sidecar only *encodes* frames we captured; it also does Finish/export.
 - macOS code is our own Objective-C (`native/macos`, compiled with `cc`), C interface to Rust; APIs newer than 12 weak-linked + runtime checks.
 - Screen: **capture at 60 fps, keep one frame per 1/30 s slot** (30 fps capture gave only 98.1 % fresh). A frame exactly on a slot boundary goes to the next slot. Capture NV12 (`420v`) wherever offered (BGRA doubles CPU).
 - One fragmented MP4 per source, all on the host clock (`CMSyncConvertTime` for AVCaptureSession buffers); keyframe 1 s, fragment 1 s, regular `fsync`; a ≈1 s queue in front of each writer, never drop on "not ready"; overload is counted and shown, never silent.
@@ -124,7 +124,7 @@ Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`.
 
 ## Dev environment
 
-- macOS 12 Monterey, Intel Core i5 (CPU only), 16 GB RAM, one built-in camera and mic. Free disk ~21 GB (run `cargo clean` in finished apps if needed).
+- macOS 12 Monterey, Intel Core i5 (CPU only), 16 GB RAM, one built-in camera and mic. Free disk ~13 GB (2026-10-27) (run `cargo clean` in finished apps if needed).
 - Windows 10/11, Linux (AppImage + .deb), macOS Apple Silicon (tested by friends).
 
 ## Release checklist
