@@ -40,4 +40,19 @@ fn build_macos_recorder() {
         println!("cargo:rustc-link-lib=framework={framework}");
     }
     println!("cargo:rustc-link-arg=-Wl,-weak_framework,ScreenCaptureKit");
+    // `@available` checks call __isPlatformVersionAtLeast. Debug builds find it in Rust's
+    // std; the release profile's LTO drops it there (the test version failed to link,
+    // 2026-10-27), so clang's own runtime library provides it.
+    let compiler = cc::Build::new().get_compiler();
+    let resource_dir = std::process::Command::new(compiler.path())
+        .arg("--print-resource-dir")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    if let Some(dir) = resource_dir {
+        let runtime = std::path::Path::new(&dir).join("lib/darwin/libclang_rt.osx.a");
+        if runtime.is_file() {
+            println!("cargo:rustc-link-arg={}", runtime.display());
+        }
+    }
 }
