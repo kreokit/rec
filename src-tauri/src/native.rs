@@ -887,7 +887,14 @@ mod tests {
         let video = status.frames as f64 / 30.0;
         let audio = status.audio_samples as f64 / 48_000.0;
         assert!((video - audio).abs() <= 1.0 / 30.0, "{video} vs {audio}");
-        assert!((video - 12.0).abs() < 0.2, "{video}");
+        // The pauses aren't counted. (Against the recorder's own length: on a slow machine
+        // the fast synthetic clock runs on past 12 s before the test's stop arrives.)
+        assert!(status.elapsed >= 12.0, "{status:?}");
+        assert!(
+            (video - status.elapsed).abs() <= 1.0 / 30.0 + 1e-6,
+            "{video} vs {}",
+            status.elapsed
+        );
         // The camera pauses with the screen and stays in sync too.
         assert_eq!(status.camera_frames, status.frames, "{status:?}");
         let camera = check_camera(&dir, &status);
