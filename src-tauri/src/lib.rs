@@ -707,6 +707,7 @@ async fn start_recording(
     mut options: Options,
     display: Option<Display>,
 ) -> Result<Session, String> {
+    let options_countdown = options.countdown;
     if options.countdown {
         let display = display.ok_or("Choose a display, then record again.")?;
         countdown_open(&app, &display, options.region)?;
@@ -723,12 +724,23 @@ async fn start_recording(
         }
     })
     .await;
+    // Esc while the devices were still opening: the countdown is gone, so is the recording.
+    if started.is_ok() && options_countdown && app.get_webview_window("countdown").is_none() {
+        let app2 = app.clone();
+        let _ = blocking(move || recordings(&app2).cancel()).await;
+        own_windows(&app, false);
+        return Err(COUNTDOWN_CANCELLED.into());
+    }
     if started.is_err() {
         countdown_close(&app);
         own_windows(&app, false);
     }
     started
 }
+
+/// What `start_recording` says when the countdown was cancelled before it had started (the
+/// setup screen shows nothing for it).
+const COUNTDOWN_CANCELLED: &str = "Cancelled before the recording started.";
 
 /// The countdown is over: its window goes, then the recording begins (a moment later, so
 /// the countdown isn't in the first picture where it can't be kept out).

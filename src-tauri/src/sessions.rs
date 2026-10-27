@@ -603,8 +603,11 @@ impl Recordings {
     /// The countdown was cancelled: nothing was recorded, so nothing is kept.
     pub fn cancel(&self) -> Result<(), String> {
         let mut guard = self.active.lock().unwrap();
-        if guard.as_ref().map(|a| a.session.state) != Some(State::Countdown) {
-            return Err("The recording has already started. Stop it instead.".into());
+        match guard.as_ref().map(|a| a.session.state) {
+            Some(State::Countdown) => {}
+            // Still starting (start_recording throws it away once it has started).
+            None => return Ok(()),
+            Some(_) => return Err("The recording has already started. Stop it instead.".into()),
         }
         let Active { dir, capture, .. } = guard.take().unwrap();
         drop(guard);

@@ -14,6 +14,9 @@ import "../styles/home.css";
 const NO_MIC = "none";
 const NO_CAMERA = "none";
 
+/** start_recording's answer when the countdown was cancelled before the recording started. */
+const COUNTDOWN_CANCELLED = "Cancelled before the recording started.";
+
 /** The last setup, kept while the app runs: Home comes back as it was after a recording. */
 const last: {
   displayId: string;
@@ -248,7 +251,8 @@ export function Home({
     try {
       onStart(await api.startRecording(options, display));
     } catch (e) {
-      toast(String(e), "error");
+      // Esc during the countdown, before the recording had started: nothing to say.
+      if (String(e) !== COUNTDOWN_CANCELLED) toast(String(e), "error");
       setBusy(false);
     }
   };
@@ -387,17 +391,6 @@ export function Home({
                 ]}
               />
             </Field>
-            <Field label="Countdown" hint={countdown ? "3-2-1 before recording; Esc cancels" : undefined}>
-              <Segmented
-                label="Countdown"
-                value={countdown ? "on" : "off"}
-                onChange={(v) => chooseCountdown(v === "on")}
-                options={[
-                  { value: "on", label: "3 s" },
-                  { value: "off", label: "Off" },
-                ]}
-              />
-            </Field>
             <Field label="Microphone">
               <Select label="Microphone" value={micId} onChange={setMicId} options={micOptions} />
             </Field>
@@ -421,6 +414,17 @@ export function Home({
                 checked={systemAudio}
                 disabled={!systemSupported}
                 onChange={setSystemAudio}
+              />
+            </Field>
+            <Field label="Countdown" hint={countdown ? "3-2-1 before recording; Esc cancels" : undefined}>
+              <Segmented
+                label="Countdown"
+                value={countdown ? "on" : "off"}
+                onChange={(v) => chooseCountdown(v === "on")}
+                options={[
+                  { value: "on", label: "3 s" },
+                  { value: "off", label: "Off" },
+                ]}
               />
             </Field>
           </div>

@@ -77,7 +77,7 @@ export function Recording({
     <div className="screen">
       <TopBar title={<span className="app-name">KreoKit Rec</span>} />
       <main className="recording">
-        <div className={paused ? "rec-state paused" : "rec-state"}>
+        <div className={paused || counting ? "rec-state paused" : "rec-state"}>
           <span className="rec-dot" aria-hidden />
           {stopping ? "Finishing the recording…" : counting ? "Starting…" : paused ? "Paused" : "Recording"}
         </div>
