@@ -57,18 +57,56 @@
   border-bottom: 1px solid var(--color-border);
 }
 
-.stage-video {
+/* The picture as exported, scaled to fit the stage. */
+.stage-picture {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+}
+
+.stage-screen {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  -o-object-fit: contain;
-  object-fit: contain;
+}
+
+/* The camera's box (layout.ts places it); the video inside shows exactly its crop. */
+.stage-camera {
+  position: absolute;
+  overflow: hidden;
+  /* Clips the video to the rounded corners in WebKit. */
+  -webkit-mask-image: -webkit-radial-gradient(white, black);
+}
+
+.stage-camera.bubble {
+  cursor: move;
+  touch-action: none;
+}
+
+.stage-camera-video {
+  position: absolute;
+  max-width: none;
 }
 
 /* Kept playing in step, just not shown in this layout. */
-.stage-video.hidden {
+.stage-screen.hidden,
+.stage-camera.hidden {
   visibility: hidden;
+  width: 2px;
+  height: 2px;
+}
+
+.finish-corners {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.finish-hint {
+  font: var(--text-meta);
+  font-weight: 400;
+  color: var(--color-text-3);
 }
 
 /* Transport */

@@ -1,0 +1,294 @@
+[
+  {
+    "name": "medium circle, bottom right, 1728x1080",
+    "layout": "bubble",
+    "bubble": {
+      "shape": "circle",
+      "size": "medium",
+      "x": 1.0,
+      "y": 1.0
+    },
+    "screen": [
+      1728,
+      1080
+    ],
+    "camera": [
+      1280,
+      720
+    ],
+    "expected": {
+      "width": 1728,
+      "height": 1080,
+      "camera_crop": {
+        "x": 280,
+        "y": 0,
+        "width": 720,
+        "height": 720
+      },
+      "camera": {
+        "x": 1426,
+        "y": 778,
+        "width": 270,
+        "height": 270
+      },
+      "radius": 135
+    }
+  },
+  {
+    "name": "small circle, top left",
+    "layout": "bubble",
+    "bubble": {
+      "shape": "circle",
+      "size": "small",
+      "x": 0.0,
+      "y": 0.0
+    },
+    "screen": [
+      1728,
+      1080
+    ],
+    "camera": [
+      1280,
+      720
+    ],
+    "expected": {
+      "width": 1728,
+      "height": 1080,
+      "camera_crop": {
+        "x": 280,
+        "y": 0,
+        "width": 720,
+        "height": 720
+      },
+      "camera": {
+        "x": 32,
+        "y": 32,
+        "width": 194,
+        "height": 194
+      },
+      "radius": 97
+    }
+  },
+  {
+    "name": "large rounded, dragged",
+    "layout": "bubble",
+    "bubble": {
+      "shape": "rounded",
+      "size": "large",
+      "x": 0.37,
+      "y": 0.61
+    },
+    "screen": [
+      1920,
+      1080
+    ],
+    "camera": [
+      1280,
+      720
+    ],
+    "expected": {
+      "width": 1920,
+      "height": 1080,
+      "camera_crop": {
+        "x": 160,
+        "y": 0,
+        "width": 960,
+        "height": 720
+      },
+      "camera": {
+        "x": 544,
+        "y": 434,
+        "width": 474,
+        "height": 356
+      },
+      "radius": 57
+    }
+  },
+  {
+    "name": "rounded on a 4:3 camera",
+    "layout": "bubble",
+    "bubble": {
+      "shape": "rounded",
+      "size": "medium",
+      "x": 0.0,
+      "y": 1.0
+    },
+    "screen": [
+      1152,
+      720
+    ],
+    "camera": [
+      640,
+      480
+    ],
+    "expected": {
+      "width": 1152,
+      "height": 720,
+      "camera_crop": {
+        "x": 0,
+        "y": 0,
+        "width": 640,
+        "height": 480
+      },
+      "camera": {
+        "x": 22,
+        "y": 518,
+        "width": 240,
+        "height": 180
+      },
+      "radius": 29
+    }
+  },
+  {
+    "name": "tall region",
+    "layout": "bubble",
+    "bubble": {
+      "shape": "circle",
+      "size": "medium",
+      "x": 0.5,
+      "y": 0.5
+    },
+    "screen": [
+      606,
+      1080
+    ],
+    "camera": [
+      1280,
+      720
+    ],
+    "expected": {
+      "width": 606,
+      "height": 1080,
+      "camera_crop": {
+        "x": 280,
+        "y": 0,
+        "width": 720,
+        "height": 720
+      },
+      "camera": {
+        "x": 228,
+        "y": 464,
+        "width": 152,
+        "height": 152
+      },
+      "radius": 76
+    }
+  },
+  {
+    "name": "odd window size",
+    "layout": "bubble",
+    "bubble": {
+      "shape": "rounded",
+      "size": "small",
+      "x": 1.0,
+      "y": 0.0
+    },
+    "screen": [
+      1366,
+      768
+    ],
+    "camera": [
+      1280,
+      720
+    ],
+    "expected": {
+      "width": 1366,
+      "height": 768,
+      "camera_crop": {
+        "x": 160,
+        "y": 0,
+        "width": 960,
+        "height": 720
+      },
+      "camera": {
+        "x": 1160,
+        "y": 24,
+        "width": 184,
+        "height": 138
+      },
+      "radius": 22
+    }
+  },
+  {
+    "name": "camera only",
+    "layout": "camera",
+    "bubble": {
+      "shape": "circle",
+      "size": "medium",
+      "x": 1.0,
+      "y": 1.0
+    },
+    "screen": [
+      1728,
+      1080
+    ],
+    "camera": [
+      1280,
+      720
+    ],
+    "expected": {
+      "width": 1280,
+      "height": 720,
+      "camera_crop": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720
+      },
+      "camera": {
+        "x": 0,
+        "y": 0,
+        "width": 1280,
+        "height": 720
+      },
+      "radius": 0
+    }
+  },
+  {
+    "name": "screen only",
+    "layout": "screen",
+    "bubble": {
+      "shape": "circle",
+      "size": "medium",
+      "x": 1.0,
+      "y": 1.0
+    },
+    "screen": [
+      1728,
+      1080
+    ],
+    "camera": [
+      1280,
+      720
+    ],
+    "expected": {
+      "width": 1728,
+      "height": 1080,
+      "camera_crop": null,
+      "camera": null,
+      "radius": 0
+    }
+  },
+  {
+    "name": "bubble without a camera falls back to the screen",
+    "layout": "bubble",
+    "bubble": {
+      "shape": "circle",
+      "size": "medium",
+      "x": 1.0,
+      "y": 1.0
+    },
+    "screen": [
+      1728,
+      1080
+    ],
+    "camera": null,
+    "expected": {
+      "width": 1728,
+      "height": 1080,
+      "camera_crop": null,
+      "camera": null,
+      "radius": 0
+    }
+  }
+]

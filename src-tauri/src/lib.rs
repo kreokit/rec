@@ -37,6 +37,7 @@ mod fieldtest {
     }
 }
 mod jpeg;
+mod layout;
 mod native;
 mod pipeline;
 mod preview;

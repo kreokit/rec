@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { CircleCheck, Pause, Play, TriangleAlert } from "lucide-react";
+import {
+  ArrowDownLeft,
+  ArrowDownRight,
+  ArrowUpLeft,
+  ArrowUpRight,
+  CircleCheck,
+  Pause,
+  Play,
+  TriangleAlert,
+} from "lucide-react";
+import { Stage } from "./Stage";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
-import { FinishSettings, Layout, Loudness, Media, Session, api } from "../lib/api";
+import { Bubble, BubbleShape, BubbleSize, FinishSettings, Layout, Loudness, Media, Session, api } from "../lib/api";
 import { checkSummary, formatDuration, recordingTitle } from "../lib/format";
 import { usePlayer } from "../lib/player";
 import { Trim, formatTime, savedEnd, snap, withEnd, withStart } from "../lib/trim";
@@ -14,6 +24,26 @@ const LOUDNESS: { value: Loudness; label: string; hint: string }[] = [
   { value: "social", label: "Social", hint: "−14 LUFS" },
   { value: "tutorial", label: "Tutorial & podcast", hint: "−16 LUFS" },
   { value: "keep", label: "Keep", hint: "as recorded" },
+];
+
+const DEFAULT_BUBBLE: Bubble = { shape: "circle", size: "medium", x: 1, y: 1 };
+
+const SHAPES: { value: BubbleShape; label: string }[] = [
+  { value: "circle", label: "Circle" },
+  { value: "rounded", label: "Rounded" },
+];
+
+const SIZES: { value: BubbleSize; label: string }[] = [
+  { value: "small", label: "Small" },
+  { value: "medium", label: "Medium" },
+  { value: "large", label: "Large" },
+];
+
+const CORNERS = [
+  { label: "Top left", icon: ArrowUpLeft, x: 0, y: 0 },
+  { label: "Top right", icon: ArrowUpRight, x: 1, y: 0 },
+  { label: "Bottom left", icon: ArrowDownLeft, x: 0, y: 1 },
+  { label: "Bottom right", icon: ArrowDownRight, x: 1, y: 1 },
 ];
 
 /** Keys typed into these don't drive the player. */
@@ -48,14 +78,21 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
     );
   }, [session.id]);
 
-  /** Changes the choices and saves them (in order, so the last change wins). */
-  const change = (patch: Partial<FinishSettings>) => {
-    if (!settings) return;
-    const next = { ...settings, ...patch };
+  /**
+   * Changes the choices and saves them (in order, so the last change wins); `save` false
+   * while dragging, then a last change with `save` true.
+   */
+  const latest = useRef<FinishSettings | null>(null);
+  const change = (patch: Partial<FinishSettings>, save = true) => {
+    const base = latest.current ?? settings;
+    if (!base) return;
+    const next = { ...base, ...patch };
+    latest.current = next;
     setSettings(next);
-    saving.current = saving.current.then(() =>
-      api.saveFinishSettings(session.id, next).catch((e) => toast(String(e), "error")),
-    );
+    if (save)
+      saving.current = saving.current.then(() =>
+        api.saveFinishSettings(session.id, next).catch((e) => toast(String(e), "error")),
+      );
   };
 
   // The trim follows the handles while dragging; it's saved when they're let go.
@@ -72,6 +109,10 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
   const systemRef = useRef<HTMLAudioElement>(null);
   const refs = useMemo(() => [micRef, systemRef, screenRef, cameraRef], []);
   const player = usePlayer(refs, trim, fps);
+  // Open at the trim's start.
+  useEffect(() => {
+    if (settings) player.seek(settings.start_s);
+  }, [settings === null]);
 
   const setEdge = (edge: "start" | "end", seconds: number) => {
     const next = edge === "start" ? withStart(trim, seconds, fps) : withEnd(trim, seconds, fps, duration);
@@ -120,7 +161,6 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
     { value: "camera", label: "Camera", disabled: !session.camera },
   ];
   const layout = settings?.layout ?? "screen";
-  const src = (path: string | null) => (path ? convertFileSrc(path) : undefined);
 
   return (
     <div className="screen">
@@ -145,30 +185,22 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
             )}
             {text}
           </div>
-          <div className="finish-stage" aria-label="Preview" onClick={() => player.toggle()}>
-            {media?.screen && (
-              <video
-                ref={screenRef}
-                className={layout === "camera" ? "stage-video hidden" : "stage-video"}
-                src={src(media.screen)}
-                preload="auto"
-                muted
-                playsInline
-              />
-            )}
-            {media?.camera && (
-              <video
-                ref={cameraRef}
-                className={layout === "camera" ? "stage-video" : "stage-video hidden"}
-                src={src(media.camera)}
-                preload="auto"
-                muted
-                playsInline
-              />
-            )}
-            {media?.mic && <audio ref={micRef} src={src(media.mic)} preload="auto" />}
-            {media?.system && <audio ref={systemRef} src={src(media.system)} preload="auto" />}
-          </div>
+          {media && (
+            <Stage
+              media={media}
+              layout={layout}
+              bubble={settings?.bubble ?? DEFAULT_BUBBLE}
+              screenSize={session.screen ? [session.screen.width, session.screen.height] : null}
+              cameraSize={session.camera ? [session.camera.width, session.camera.height] : null}
+              screenRef={screenRef}
+              cameraRef={cameraRef}
+              onToggle={player.toggle}
+              onBubble={(position) => settings && change({ bubble: { ...settings.bubble, ...position } }, false)}
+              onBubbleDone={() => settings && change({}, true)}
+            />
+          )}
+          {media?.mic && <audio ref={micRef} src={convertFileSrc(media.mic)} preload="auto" />}
+          {media?.system && <audio ref={systemRef} src={convertFileSrc(media.system)} preload="auto" />}
           <div className="transport">
             <IconButton
               icon={player.playing ? Pause : Play}
@@ -207,6 +239,36 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
               <SectionLabel>Layout</SectionLabel>
               <Segmented label="Layout" value={settings.layout} options={layouts} onChange={(l) => change({ layout: l })} />
             </section>
+            {settings.layout === "bubble" && (
+              <section className="finish-section">
+                <SectionLabel>Camera bubble</SectionLabel>
+                <Segmented
+                  label="Shape"
+                  value={settings.bubble.shape}
+                  options={SHAPES}
+                  onChange={(shape) => change({ bubble: { ...settings.bubble, shape } })}
+                />
+                <Segmented
+                  label="Size"
+                  value={settings.bubble.size}
+                  options={SIZES}
+                  onChange={(size) => change({ bubble: { ...settings.bubble, size } })}
+                />
+                <div className="finish-corners" role="group" aria-label="Corner">
+                  {CORNERS.map((c) => (
+                    <IconButton
+                      key={c.label}
+                      icon={c.icon}
+                      label={c.label}
+                      variant="secondary"
+                      pressed={settings.bubble.x === c.x && settings.bubble.y === c.y}
+                      onClick={() => change({ bubble: { ...settings.bubble, x: c.x, y: c.y } })}
+                    />
+                  ))}
+                  <span className="finish-hint">Or drag the camera in the preview.</span>
+                </div>
+              </section>
+            )}
             {session.mic && (
               <section className="finish-section">
                 <SectionLabel>Voice</SectionLabel>
