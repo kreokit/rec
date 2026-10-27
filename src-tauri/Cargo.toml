@@ -40,6 +40,16 @@ libc = "0.2.191"
 
 # Windows capture (src/native/win.rs): Windows.Graphics.Capture and DXGI duplication,
 # Media Foundation cameras, WASAPI sound.
+# Linux capture (src/native/linux.rs): the ScreenCast portal and PipeWire, V4L2 cameras,
+# sound through cpal's PipeWire host. Needs libpipewire-0.3-dev, libasound2-dev and clang
+# to build.
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "screencast"] }
+pipewire = "0.10.1"
+v4l = "0.14.0"
+cpal = { version = "0.18.2", features = ["pipewire"] }
+tokio = { version = "1", features = ["rt", "time"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-capture = "2.0.1"
 cpal = "0.18.2"

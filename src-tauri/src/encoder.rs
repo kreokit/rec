@@ -191,12 +191,13 @@ pub fn args(kind: &Kind, output: &Path) -> Vec<String> {
                 push(&mut a, &["-color_range", "tv", "-colorspace", "bt709"]);
             }
             push(&mut a, &["-i", "pipe:0"]);
-            // Into BT.709 video-range 4:2:0 at the output size (only where it differs).
+            // Into BT.709 video-range 4:2:0 at the output size (only where it differs); a
+            // picture of another shape (Linux: the portal's choice) is letterboxed.
             let mut filters = Vec::new();
             if input.format != PixelFormat::Nv12 || (input.width, input.height) != (*width, *height)
             {
                 filters.push(format!(
-                    "scale={width}:{height}:flags=bicubic:out_color_matrix=bt709:out_range=tv"
+                    "scale={width}:{height}:flags=bicubic:out_color_matrix=bt709:out_range=tv:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
                 ));
             }
             // The frames carry the colour description the encoder writes.

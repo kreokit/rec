@@ -15,7 +15,8 @@ env:
 jobs:
   linux:
     name: Linux tests and licence checks
-    runs-on: ubuntu-22.04
+    # PipeWire 1.0 (cpal's PipeWire host needs 0.3.53 or newer).
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +34,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: Linux packages for Tauri
+      - name: Linux packages for Tauri, PipeWire, ALSA and V4L2 (bindgen needs clang), Xvfb
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev
+            libayatana-appindicator3-dev librsvg2-dev libpipewire-0.3-dev libspa-0.2-dev \
+            libasound2-dev clang libclang-dev xvfb
       - name: Our LGPL FFmpeg for the recorder and probe tests
         run: |
           python scripts/fetch_ffmpeg.py x86_64-unknown-linux-gnu
@@ -46,9 +48,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
       - run: pnpm build
+      # Under Xvfb without a ScreenCast portal: the X11 screen through x11grab.
       - name: Rust tests (with the FFmpeg ones)
         working-directory: src-tauri
-        run: cargo test --locked -- --include-ignored
+        run: xvfb-run -a -s "-screen 0 1280x720x24" cargo test --locked -- --include-ignored
       - name: Rust dependency licences (cargo-deny)
         uses: EmbarkStudios/cargo-deny-action@v2
         with:

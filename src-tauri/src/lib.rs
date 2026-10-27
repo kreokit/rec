@@ -1,4 +1,4 @@
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod audio;
 mod awake;
 #[cfg(feature = "bench")]
@@ -640,6 +640,9 @@ pub fn run() {
             report_problem
         ])
         .setup(|app| {
+            // Linux keeps the screen portal's restore tokens there.
+            #[cfg(target_os = "linux")]
+            native::set_data_dir(app.path().app_data_dir()?);
             let root: PathBuf = app.path().app_data_dir()?.join("recordings");
             let mut recordings = Recordings::new(root, Box::new(sessions::NativeBackend));
             if synthetic().is_some() {

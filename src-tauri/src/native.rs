@@ -622,9 +622,17 @@ mod portable {
         Ok(Recorder(pipeline::Recorder::new(core, sources, pictures)))
     }
 
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    fn system(config: &RecordConfig) -> Result<Recorder, String> {
+        let (core, sources) = super::linux::start(config)?;
+        let pictures = config.screen.is_some() || config.camera.is_some();
+        Ok(Recorder(pipeline::Recorder::new(core, sources, pictures)))
+    }
+
+    /// The pipe-recorder feature on macOS: synthetic sources only.
+    #[cfg(target_os = "macos")]
     fn system(_config: &RecordConfig) -> Result<Recorder, String> {
-        Err("Recording the real screen on this system arrives in the next test version of KreoKit Rec.".into())
+        Err("The Rust recorder records only synthetic sources on macOS.".into())
     }
 }
 
@@ -639,75 +647,14 @@ pub use win::{
 };
 
 #[cfg(target_os = "linux")]
-pub use other::*;
-
-/// Linux: devices and permissions (the system capture follows in M3).
+mod linux;
 #[cfg(target_os = "linux")]
-mod other {
-    use super::*;
-
-    const NOT_YET: &str = "This arrives in the next test version of KreoKit Rec on this system.";
-
-    pub fn screen_access() -> Access {
-        Access::Allowed
-    }
-    pub fn request_screen_access() {}
-    pub fn mic_access() -> Access {
-        Access::Allowed
-    }
-    pub fn request_mic_access() -> Access {
-        Access::Allowed
-    }
-    pub fn camera_access() -> Access {
-        Access::Allowed
-    }
-    pub fn request_camera_access() -> Access {
-        Access::Allowed
-    }
-    pub fn displays() -> Vec<Display> {
-        Vec::new()
-    }
-    pub fn mics() -> Vec<Mic> {
-        Vec::new()
-    }
-    pub fn cameras() -> Vec<Camera> {
-        Vec::new()
-    }
-    pub fn windows() -> Vec<Window> {
-        Vec::new()
-    }
-    pub fn system_audio_supported() -> bool {
-        false
-    }
-    pub fn window_capture_supported() -> bool {
-        false
-    }
-    pub fn monitor_start(_mic_id: &str) -> Result<(), String> {
-        Err(NOT_YET.into())
-    }
-    pub fn monitor_peak() -> f32 {
-        0.0
-    }
-    pub fn monitor_stop() {}
-    pub fn preview_start(
-        _id: &str,
-        width: u32,
-        height: u32,
-        synthetic: bool,
-    ) -> Result<(), String> {
-        if synthetic {
-            crate::preview::start_synthetic(width, height)
-        } else {
-            Err(NOT_YET.into())
-        }
-    }
-    pub fn preview_frame(seq: &mut u64) -> Option<Vec<u8>> {
-        crate::preview::frame(seq)
-    }
-    pub fn preview_stop() {
-        crate::preview::stop()
-    }
-}
+pub use linux::{
+    camera_access, cameras, displays, mic_access, mics, monitor_peak, monitor_start, monitor_stop,
+    preview_frame, preview_start, preview_stop, request_camera_access, request_mic_access,
+    request_screen_access, screen_access, set_data_dir, system_audio_supported,
+    window_capture_supported, windows,
+};
 
 #[cfg(test)]
 pub(crate) mod tests {
