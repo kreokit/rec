@@ -3190,6 +3190,7 @@ dependencies = [
  "ebur128",
  "libc",
  "pipewire",
+ "rec-tray-feature",
  "serde",
  "serde_json",
  "sha2",
@@ -3201,6 +3202,13 @@ dependencies = [
  "v4l",
  "windows",
  "windows-capture",
+]
+
+[[package]]
+name = "rec-tray-feature"
+version = "0.1.0"
+dependencies = [
+ "tauri",
 ]
 
 [[package]]

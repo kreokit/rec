@@ -1,0 +1,15 @@
+[package]
+name = "rec-tray-feature"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Turns on Tauri's tray-icon feature for KreoKit Rec on macOS and Windows only"
+
+# Rec depends on this crate only on macOS and Windows (src-tauri/Cargo.toml). Cargo merges
+# the feature into Rec's own tauri dependency there. Rec's manifest itself never names
+# tray-icon: the Tauri CLI reads the features from it (target tables included) and on Linux
+# would then bundle the AppIndicator libraries, one of them GPL-3.0
+# (THIRD-PARTY-LICENSES.md, "System libraries").
+[dependencies]
+tauri = { version = "2", default-features = false, features = ["tray-icon"] }
