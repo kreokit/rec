@@ -44,21 +44,39 @@ frames).
 
 A 20 s run after the fixes (screen + camera + mic): camera 0 dropped, mic no gap.
 
-## Region capture on the real screen: doesn't work on macOS 12 yet
+## Region capture on the real screen
 
 `--bench fresh --region` records only a region 24 points around the counter window and
-reads the counter back. With CGDisplayStream's source rectangle (what macOS 12 uses) the
-picture is **pure black**: only the mouse pointer is drawn, and 2–4 new pictures arrive in
-20 s although the counter changes 60 times a second. Tried: 598×120 and 16-aligned
-608×128 output, with a destination rectangle too, BGRA instead of NV12: all black. The
-units are right (the header: display points from the top-left). Whole-display capture on
-the same build works (99.70 % above). The synthetic tests can't see this: they don't use
-macOS's capture.
+reads the counter back: if the crop were in the wrong place, the counter couldn't be read.
 
-OBS doesn't use the source rectangle either: it captures the whole display and crops on
-the GPU. Next step (needs the user's OK for short real-screen runs): do the same for a
-region on macOS 12 (whole display, cropped with VideoToolbox's pixel transfer) and measure
-fresh frames and CPU; ScreenCaptureKit's `sourceRect` on macOS 13+ is checked separately.
+**First try, CGDisplayStream's source rectangle (what macOS 12 used): black.** Only the
+mouse pointer was drawn, and 2–4 new pictures arrived in 20 s although the counter changes
+60 times a second. Tried 598×120 and 16-aligned 608×128 output, with a destination
+rectangle, and BGRA instead of NV12: all black. The units were right (the header: display
+points from the top-left). The synthetic tests couldn't see it: they don't use macOS's
+capture.
+
+**Now: whole display captured, region cut out on the GPU** (as OBS does: it captures the
+whole display and crops). The display is captured at the size where the region comes out
+at the output size; each written frame is cut out with VideoToolbox's pixel transfer before
+the encoder, so nothing outside the region reaches the disk. Four 30 s runs, screen only,
+Mac otherwise idle; the region at the display's own 2 pixels per point (996×202), so the
+whole display is captured at its full 2880×1800, the heaviest case:
+
+| Run | Output | Fresh frames | Counter read back | CPU (% of one core) |
+|---|---|---|---|---|
+| Whole display | 1728×1080 | 100 % | every frame | 15.2 % |
+| **Region** | 996×202 | **100 %** | **every frame (0 unreadable)** | **16.0 %** |
+| Whole display | 1728×1080 | 100 % | every frame | 15.5 % |
+| **Region** | 996×202 | **100 %** | **every frame (0 unreadable)** | **17.6 %** |
+
+The region costs about **1.5 points of one core more** than the whole display (16.8 % vs
+15.4 % on average), although it captures 2.8× the pixels: light enough on the i5, so no
+crop at export is needed. Timestamps regular, no late or dropped frames in any run.
+
+A black screen picture can't pass unnoticed any more: the check after every recording
+reads three frames back and reports a black picture (`check.rs`), and the manual
+checklist (`docs/manual-checklist.md`) has a real region recording.
 
 ## Found and fixed during the tests
 
@@ -72,6 +90,7 @@ fresh frames and CPU; ScreenCaptureKit's `sourceRect` on macOS 13+ is checked se
 - **"The microphone sent no sound for 0.4 s" after every recording:** the mic's first sound
   comes 0.35 s after the start. That silence still keeps the sound in sync, but isn't
   reported any more.
+- **Region recorded black on macOS 12:** redone as whole display + GPU crop (above).
 - **5 camera frames dropped at the start:** the ~28 slots filled with the camera's first
   picture overflowed the encoder's queue while it was starting. Repeated pictures don't
   count against the queue any more (0 dropped afterwards).

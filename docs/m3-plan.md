@@ -26,10 +26,11 @@ measuring first.
    "Needs macOS 13 or newer". **Can't be tried on the dev Mac**: built and unit-tested
    here, checked on CI macOS 14/15 as far as permissions allow there, and on a friend's
    macOS 13+ Mac (manual checklist).
-5. **Region capture.** *(Built 2026-10-27, tried with synthetic sources. On the real screen
-   (step 8) CGDisplayStream's source rectangle gives a black picture on macOS 12: to be
-   redone as whole-display capture + crop, see `docs/m3-results.md`.)* CGDisplayStream / ScreenCaptureKit with a source rectangle, so the
-   cost stays like full screen. Choosing it: a see-through overlay on the chosen display,
+5. **Region capture.** *(Done 2026-10-27. CGDisplayStream's source rectangle recorded black
+   on macOS 12, so on 12 the whole display is captured and the region cut out on the GPU
+   (VTPixelTransferSession) before the encoder: 100 % fresh, +1.5 points of CPU, see
+   `docs/m3-results.md`. ScreenCaptureKit (13+) keeps its source rectangle; checked by
+   friends, `docs/manual-checklist.md`.)* Choosing it: a see-through overlay on the chosen display,
    drag a rectangle, size shown, Enter/Record to confirm, Esc to cancel. Output keeps the
    region's shape, scaled to 1080p/720p at most, even sizes.
 6. **Window capture.** ScreenCaptureKit window stream (as OBS does on macOS 12.5+;
@@ -46,7 +47,7 @@ measuring first.
    to the shortest. Pause/resume applies to every track.
 8. **Real-device test on the dev Mac (with the user's OK):** *(Done 2026-10-27 for the
    camera: `docs/m3-results.md`; camera − mic −4.9 ms, so no correction; the region crop
-   failed and is redone in step 5.)* camera fresh-frame and timing
+   failed at first and was redone in step 5, then measured.)* camera fresh-frame and timing
    run (10 min screen 1080p + camera 720p + mic; CPU, missing frames, drift), and the
    **camera tap/clap test**: the user claps or taps the desk in view of the camera about
    once a second; the bench finds the hands meeting (largest frame-to-frame change) and
@@ -86,7 +87,7 @@ measuring first.
     and Linux runners have no screen worth measuring, no camera, no audio devices: the
     research showed this). `cargo-deny` + `THIRD-PARTY-LICENSES.md` for every new crate.
 14. **Bench builds for friends** as CI artifacts (Windows .exe, Linux AppImage, macOS
-    13+): `--bench check|fresh|sync` ported, plus a short manual checklist (permissions,
+    13+): `--bench check|fresh|sync` ported, plus the manual checklist (`docs/manual-checklist.md`: permissions,
     1080p30 fresh frames, camera, computer sound, key-tap sync, kill-and-recover). These
     runs happen in parallel and must pass before the M6 release (not needed for M3).
 

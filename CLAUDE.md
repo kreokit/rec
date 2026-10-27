@@ -68,7 +68,7 @@ Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`, `docs/m3-
 - Screen: **capture at 60 fps, keep one frame per 1/30 s slot** (30 fps capture gave only 98.1 % fresh). A frame exactly on a slot boundary goes to the next slot. Capture NV12 (`420v`) wherever offered (BGRA doubles CPU).
 - One fragmented MP4 per source, all on the host clock (`CMSyncConvertTime` for AVCaptureSession buffers); keyframe 1 s, fragment 1 s, regular `fsync`; a ≈1 s queue in front of each writer, never drop on "not ready"; overload is counted and shown, never silent.
 - Camera (M3): fix its frame rate (min = max frame duration) so it doesn't halve in low light; measure its real timing against the mic (open question in the research).
-- Region (M3): a source rectangle on CGDisplayStream / ScreenCaptureKit (cost like full screen), output in the region's shape. **On macOS 12 the CGDisplayStream source rectangle records black** (only the pointer; measured 2026-10-27, `docs/m3-results.md`): to be redone as whole display + crop, as OBS does. Chosen in a see-through overlay window (`region_open`, `RegionOverlay.tsx`) above the menu bar (`native/macos/window.m`); needs Tauri's `macos-private-api` (transparent windows; fine outside the App Store). The overlay confirms with "Use region"/Enter and returns to Home, where Record starts (Home holds camera/mic).
+- Region (M3): output in the region's shape. **macOS 12: the whole display is captured at the size where the region comes out at the output size, and each written frame is cut out with a VTPixelTransferSession** (clean-aperture crop) before the encoder, so nothing outside the region reaches the disk; CGDisplayStream's own source rectangle records black on 12 (measured 2026-10-27). Cost: +1.5 points of one core vs whole display (`docs/m3-results.md`). ScreenCaptureKit (13+) uses its `sourceRect` (not verifiable here: friends' checklist). The check flags a black screen picture after every recording. Chosen in a see-through overlay window (`region_open`, `RegionOverlay.tsx`) above the menu bar (`native/macos/window.m`); needs Tauri's `macos-private-api` (transparent windows; fine outside the App Store). The overlay confirms with "Use region"/Enter and returns to Home, where Record starts (Home holds camera/mic).
 
 ## Testing on the dev Mac (test app)
 
@@ -120,7 +120,7 @@ Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`, `docs/m3-
 - No dropped frames in the fake source at 1080p30 (frame counter has no gaps).
 - Crash safety: kill the recorder mid-recording; the recovered file plays and is at most 1–2 seconds shorter.
 - Export: exact size, H.264 settings, AAC 48 kHz, duration matches the trim, bubble at the right position (pixel check), no overwrites.
-- Manual checklist for real devices (per OS), filled in by the user during testing.
+- Manual checklist for real devices (per OS), filled in by the user during testing: `docs/manual-checklist.md` (started in M3; includes a real region recording, since synthetic sources can't see a black capture). The `--self-test` runs synthetic sources, so it also runs the black-picture check on its recording, and the release checklist includes the manual real-capture items.
 
 ## Dev environment
 
@@ -129,6 +129,7 @@ Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`, `docs/m3-
 
 ## Release checklist
 
+- Every item of `docs/manual-checklist.md` passed on each system it names (dev Mac on macOS 12, a macOS 13+ Mac, Windows, Linux), including the real region recording (a black or wrong-place region must fail it).
 - After publishing, update the kreokit/.github profile README row (link to `/releases`, published apps first) and the "How to install" section.
 
 ## Backlog (not v0.1)
