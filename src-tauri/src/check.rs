@@ -2,12 +2,14 @@
 //! ffprobe, each picture track has the frames the recorder wrote, the camera starts and
 //! ends with the screen (within one frame), and the sound starts and ends with the picture
 //! (within one frame, plus one AAC frame at the end since AAC stores sound in 1024-sample
-//! blocks).
+//! blocks), and the screen picture isn't black all through.
 
 use std::path::Path;
+use std::process::Command;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ffmpeg;
 use crate::native::Status;
 use crate::probe::{self, MediaInfo};
 
@@ -171,6 +173,16 @@ pub fn check(dir: &Path, status: Option<&Status>, fps: u32) -> Check {
         }
     }
 
+    // A capture that records black (a region through CGDisplayStream's source rectangle
+    // on macOS 12 did, 2026-10-27; a missing permission can too) must not pass unnoticed.
+    if let Some(s) = &c.screen
+        && looks_black(&dir.join("screen.mp4"), s) == Some(true)
+    {
+        c.problems.push(
+            "The screen picture is black. Check that KreoKit Rec may record the screen (Screen Recording in the system's privacy settings). If it may and you recorded a region, record the whole display instead and tell us with Report a problem.".into(),
+        );
+    }
+
     if let Some(st) = status {
         missing(
             &mut c.problems,
@@ -220,10 +232,64 @@ pub fn check(dir: &Path, status: Option<&Status>, fps: u32) -> Check {
     c
 }
 
+/// Whether a picture track is black all through: frames at a quarter, half and three
+/// quarters of it, each at least 97 % black (the mouse pointer alone can be drawn on a black
+/// picture). `None` when it can't be read.
+fn looks_black(path: &Path, track: &TrackCheck) -> Option<bool> {
+    let ffmpeg = ffmpeg::locate("ffmpeg").ok()?;
+    for part in [0.25, 0.5, 0.75] {
+        let at = track.start_s + track.duration_s * part;
+        let output = Command::new(&ffmpeg)
+            .args(["-v", "error", "-ss", &format!("{at:.3}"), "-i"])
+            .arg(path)
+            .args(["-frames:v", "1", "-vf", "scale=64:36", "-f", "rawvideo"])
+            .args(["-pix_fmt", "gray", "-"])
+            .output()
+            .ok()?;
+        let pixels = output.stdout;
+        if !output.status.success() || pixels.is_empty() {
+            return None;
+        }
+        // Video-range black is 16.
+        let black = pixels.iter().filter(|&&v| v <= 24).count();
+        if black * 100 < pixels.len() * 97 {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sessions::tests::{make_camera, make_tracks, temp_root};
+
+    /// Needs ffmpeg: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn flags_a_black_screen_picture() {
+        let dir = temp_root("check-black");
+        make_tracks(&dir, 2.0, false, false);
+        let c = check(&dir, None, 30);
+        assert!(c.problems.is_empty(), "{c:?}");
+        // Black with only a small "mouse pointer" drawn, as the macOS 12 region capture did.
+        let status = Command::new(ffmpeg::locate("ffmpeg").unwrap())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("color=black:size=608x128:rate=30:duration=2")
+            .args(["-vf", "drawbox=x=333:y=99:w=40:h=28:color=white:t=fill"])
+            .args(["-c:v", "mpeg4", "-q:v", "2"])
+            .arg(dir.join("screen.mp4"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let c = check(&dir, None, 30);
+        assert_eq!(c.problems.len(), 1, "{c:?}");
+        assert!(
+            c.problems[0].starts_with("The screen picture is black."),
+            "{c:?}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// Needs ffmpeg: `cargo test -- --ignored`.
     #[test]
