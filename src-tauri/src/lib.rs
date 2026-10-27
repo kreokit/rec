@@ -50,6 +50,21 @@ struct Permissions {
     mic: Access,
     /// macOS 12 applies a new Screen Recording permission only after a restart.
     restart_after_screen: bool,
+    /// Screen Recording was requested in an earlier run and still isn't allowed: either
+    /// the box wasn't ticked, or macOS ties it to an older copy of the app (ad-hoc signed
+    /// apps change their signature with every update, and the entry no longer matches).
+    screen_asked_before: bool,
+}
+
+/// Remembers that Screen Recording was requested (in the app data folder), so the next
+/// start can tell "never asked" from "asked, but it didn't take effect".
+fn screen_marker(app: &AppHandle) -> Option<PathBuf> {
+    Some(
+        app.path()
+            .app_data_dir()
+            .ok()?
+            .join("screen-permission-asked"),
+    )
 }
 
 /// The macOS major version (0 elsewhere).
@@ -77,9 +92,9 @@ fn macos_major() -> u32 {
 }
 
 #[tauri::command]
-fn permissions() -> Permissions {
+fn permissions(app: AppHandle) -> Permissions {
     if let Some(mode) = synthetic() {
-        let access = if mode == "ask" {
+        let access = if mode == "ask" || mode == "stuck" {
             Access::NotAsked
         } else {
             Access::Allowed
@@ -88,12 +103,20 @@ fn permissions() -> Permissions {
             screen: access,
             mic: access,
             restart_after_screen: true,
+            screen_asked_before: mode == "stuck",
         };
     }
+    let screen = native::screen_access();
+    let marker = screen_marker(&app);
+    let asked = marker.as_ref().is_some_and(|m| m.is_file());
+    if screen == Access::Allowed && asked {
+        let _ = std::fs::remove_file(marker.unwrap());
+    }
     Permissions {
-        screen: native::screen_access(),
+        screen,
         mic: native::mic_access(),
         restart_after_screen: macos_major() == 12,
+        screen_asked_before: asked && screen != Access::Allowed,
     }
 }
 
@@ -108,10 +131,36 @@ async fn request_mic() -> Result<Access, String> {
 
 /// The system's screen-recording request (macOS shows it once, then opens nothing).
 #[tauri::command]
-fn request_screen() {
+fn request_screen(app: AppHandle) {
+    if let Some(marker) = screen_marker(&app) {
+        let _ = std::fs::create_dir_all(marker.parent().unwrap());
+        let _ = std::fs::write(marker, b"");
+    }
     if synthetic().is_none() {
         native::request_screen_access();
     }
+}
+
+/// Removes macOS's Screen Recording entry for this app (its own entry only) and asks
+/// again, so the entry matches the copy that is running now. For when allowing didn't
+/// take effect.
+#[tauri::command]
+fn reset_screen_permission(app: AppHandle) -> Result<(), String> {
+    if synthetic().is_none() {
+        #[cfg(target_os = "macos")]
+        {
+            let id = app.config().identifier.clone();
+            let ok = std::process::Command::new("tccutil")
+                .args(["reset", "ScreenCapture", &id])
+                .status()
+                .is_ok_and(|s| s.success());
+            if !ok {
+                return Err("The old permission couldn't be removed automatically. In System Preferences, select KreoKit Rec under Screen Recording, click –, then click + and choose KreoKit Rec in Applications.".into());
+            }
+        }
+    }
+    request_screen(app);
+    Ok(())
 }
 
 /// Opens System Preferences (System Settings) at Screen Recording or Microphone.
@@ -335,6 +384,7 @@ pub fn run() {
             permissions,
             request_mic,
             request_screen,
+            reset_screen_permission,
             open_privacy_settings,
             restart_app,
             devices,

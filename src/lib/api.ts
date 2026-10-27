@@ -8,6 +8,8 @@ export interface Permissions {
   mic: Access;
   /** macOS 12: a new Screen Recording permission applies after a restart. */
   restart_after_screen: boolean;
+  /** Asked in an earlier run and still not allowed (not ticked, or tied to an older copy). */
+  screen_asked_before: boolean;
 }
 
 export interface Display {
@@ -99,6 +101,7 @@ export const api = {
   permissions: () => invoke<Permissions>("permissions"),
   requestMic: () => invoke<Access>("request_mic"),
   requestScreen: () => invoke<void>("request_screen"),
+  resetScreenPermission: () => invoke<void>("reset_screen_permission"),
   openPrivacySettings: (kind: "screen" | "mic") => invoke<void>("open_privacy_settings", { kind }),
   restartApp: () => invoke<void>("restart_app"),
   devices: () => invoke<{ displays: Display[]; mics: Mic[] }>("devices"),

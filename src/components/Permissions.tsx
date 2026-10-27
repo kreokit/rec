@@ -33,6 +33,17 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
     }
   };
 
+  // Allowing didn't take effect: macOS's entry belongs to an older copy of the app.
+  const resetScreen = async () => {
+    try {
+      await api.resetScreenPermission();
+      await api.openPrivacySettings("screen");
+      setScreenAsked(true);
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const allowMic = async () => {
     try {
       const answer = state.mic === "not_asked" ? await api.requestMic() : state.mic;
@@ -44,6 +55,7 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
   };
 
   const screenOk = state.screen === "allowed";
+  const stuck = !screenOk && !screenAsked && state.screen_asked_before;
   const micOk = state.mic === "allowed";
 
   return (
@@ -62,6 +74,23 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
           <div className="permission-text">
             <h2>Screen Recording</h2>
             <p>So KreoKit Rec can record what's on your screen.</p>
+            {stuck && (
+              <div className="permission-stuck">
+                <p className="permission-hint">
+                  Screen Recording isn't on for KreoKit Rec yet. If you already ticked it, macOS is probably holding an
+                  entry for an older copy of the app (this can happen after an update).
+                </p>
+                <ol className="permission-steps">
+                  <li>Click Reset and try again: KreoKit Rec removes its old entry and asks again.</li>
+                  <li>In System Preferences, click the lock, tick KreoKit Rec, choose Later.</li>
+                  <li>Click Restart KreoKit Rec here.</li>
+                </ol>
+                <p>
+                  If it still doesn't work: in System Preferences, select KreoKit Rec under Screen Recording, click –,
+                  then click + and choose KreoKit Rec from Applications. Then restart the app.
+                </p>
+              </div>
+            )}
             {!screenOk && screenAsked && (
               <ol className="permission-steps">
                 <li>If macOS shows a message first, choose Open System Preferences.</li>
@@ -80,6 +109,10 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
           </div>
           {screenOk ? (
             <Allowed />
+          ) : stuck ? (
+            <Button variant="primary" onClick={() => void resetScreen()}>
+              Reset and try again
+            </Button>
           ) : screenAsked ? (
             <Button variant="primary" icon={RotateCw} onClick={() => void api.restartApp()}>
               Restart KreoKit Rec
