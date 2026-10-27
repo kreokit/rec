@@ -67,6 +67,7 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
   const screenOk = state.screen === "allowed";
   const stuck = !screenOk && !screenAsked && state.screen_asked_before;
   const micOk = state.mic === "allowed";
+  const settingsLabel = state.os === "windows" ? "Open Settings" : "Open System Preferences";
 
   return (
     <div className="screen">
@@ -74,8 +75,9 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
       <main className="permissions">
         <h1 className="permissions-title">Before you record</h1>
         <p className="permissions-intro">
-          macOS asks you to allow screen recording, the microphone and the camera for each app. Everything stays on
-          this Mac.
+          {state.os === "macos"
+            ? "macOS asks you to allow screen recording, the microphone and the camera for each app. Everything stays on this Mac."
+            : "Your system decides which apps may use the microphone and the camera. Everything stays on this computer."}
         </p>
 
         <section className="permission-row">
@@ -144,7 +146,9 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
             <p>So your voice is recorded with the screen. You can also record without it.</p>
             {state.mic === "denied" && (
               <p className="permission-hint">
-                Not allowed yet: in System Preferences, tick KreoKit Rec under Microphone. It works right away.
+                {state.os === "windows"
+                  ? "Not allowed yet: in Settings, turn on microphone access for desktop apps. It works right away."
+                  : "Not allowed yet: in System Preferences, tick KreoKit Rec under Microphone. It works right away."}
               </p>
             )}
           </div>
@@ -152,7 +156,7 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
             <Allowed />
           ) : (
             <Button variant={screenOk ? "primary" : "secondary"} onClick={() => void allowMic()}>
-              {state.mic === "denied" ? "Open System Preferences" : "Allow…"}
+              {state.mic === "denied" ? settingsLabel : "Allow…"}
             </Button>
           )}
         </section>
@@ -166,7 +170,9 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
             <p>Only if you want yourself in the video. You can also allow it later, when you choose a camera.</p>
             {state.camera === "denied" && (
               <p className="permission-hint">
-                Not allowed yet: in System Preferences, tick KreoKit Rec under Camera. It works right away.
+                {state.os === "windows"
+                  ? "Not allowed yet: in Settings, turn on camera access for desktop apps. It works right away."
+                  : "Not allowed yet: in System Preferences, tick KreoKit Rec under Camera. It works right away."}
               </p>
             )}
           </div>
@@ -174,7 +180,7 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
             <Allowed />
           ) : (
             <Button variant="secondary" onClick={() => void allowCamera()}>
-              {state.camera === "denied" ? "Open System Preferences" : "Allow…"}
+              {state.camera === "denied" ? settingsLabel : "Allow…"}
             </Button>
           )}
         </section>

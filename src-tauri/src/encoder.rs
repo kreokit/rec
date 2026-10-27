@@ -26,6 +26,7 @@ pub enum PixelFormat {
     /// Y plane, then interleaved U/V at half size (video range, BT.709).
     Nv12,
     /// 8-bit B, G, R, A (full range RGB; converted to BT.709 by FFmpeg).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     Bgra,
 }
 

@@ -3,7 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 
 export type Access = "allowed" | "denied" | "not_asked";
 
+export type Os = "macos" | "windows" | "linux";
+
 export interface Permissions {
+  /** Which system's settings the texts name. */
+  os: Os;
   screen: Access;
   mic: Access;
   camera: Access;
@@ -75,11 +79,16 @@ export interface Devices {
   displays: Display[];
   mics: Mic[];
   cameras: Camera[];
-  /** The computer sound can be recorded (macOS 13+). */
+  /** The computer sound can be recorded; otherwise why not. */
   system_audio: boolean;
+  system_audio_note: string | null;
   /** Windows can be recorded; otherwise why not. */
   windows: boolean;
   windows_note: string | null;
+  /** A region can be chosen; otherwise why not. */
+  regions: boolean;
+  regions_note: string | null;
+  os: Os;
 }
 
 export interface Estimate {

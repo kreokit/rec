@@ -291,9 +291,33 @@ fn folder_name(ms: u64) -> String {
             tm.tm_sec
         )
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        format!("recording-{ms}")
+        // GetLocalTime; ms is the current time when a recording starts.
+        #[repr(C)]
+        #[derive(Default)]
+        struct SystemTime {
+            year: u16,
+            month: u16,
+            day_of_week: u16,
+            day: u16,
+            hour: u16,
+            minute: u16,
+            second: u16,
+            milliseconds: u16,
+        }
+        #[link(name = "kernel32")]
+        unsafe extern "system" {
+            fn GetLocalTime(time: *mut SystemTime);
+        }
+        let _ = ms;
+        let mut t = SystemTime::default();
+        // SAFETY: a valid pointer to a SYSTEMTIME-shaped struct.
+        unsafe { GetLocalTime(&mut t) };
+        format!(
+            "{:04}-{:02}-{:02}-{:02}{:02}{:02}",
+            t.year, t.month, t.day, t.hour, t.minute, t.second
+        )
     }
 }
 

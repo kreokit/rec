@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Trash2, TriangleAlert, Video } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
-import { Camera, Display, Estimate, Mic as MicDevice, Options, Region, Session, Window, WindowChoice, api } from "../lib/api";
+import { Camera, Display, Estimate, Mic as MicDevice, Options, Os, Region, Session, Window, WindowChoice, api } from "../lib/api";
 import { checkSummary, clockTime, formatBytes, formatDuration, formatRoom, recordingTitle } from "../lib/format";
 import { regionPixels } from "../lib/region";
 import { Button, Field, ICON_STROKE, Menu, MenuEntry, Segmented, Select, Switch, toast, useContextMenu } from "../ui";
@@ -60,6 +60,10 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   const [windowSupport, setWindowSupport] = useState<{ ok: boolean; note: string | null }>({ ok: false, note: null });
   // The computer's sound (macOS 13+).
   const [systemSupported, setSystemSupported] = useState(false);
+  const [systemNote, setSystemNote] = useState<string | null>(null);
+  // Regions (not on Linux desktops whose screen dialog chooses whole displays).
+  const [regionSupport, setRegionSupport] = useState<{ ok: boolean; note: string | null }>({ ok: true, note: null });
+  const [os, setOs] = useState<Os>("macos");
   const [systemAudio, setSystemAudio] = useState(last.systemAudio);
   const [quality, setQuality] = useState(last.quality);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
@@ -76,14 +80,19 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   useEffect(refresh, [refresh]);
 
   useEffect(() => {
-    api.devices().then(({ displays, mics, cameras, system_audio, windows, windows_note }) => {
+    api.devices().then((devices) => {
+      const { displays, mics, cameras, system_audio, windows, windows_note } = devices;
       setDisplays(displays);
       setMics(mics);
       setCameras(cameras);
       setSystemSupported(system_audio);
+      setSystemNote(devices.system_audio_note);
       if (!system_audio) setSystemAudio(false);
       setWindowSupport({ ok: windows, note: windows_note });
+      setRegionSupport({ ok: devices.regions, note: devices.regions_note });
+      setOs(devices.os);
       if (!windows && last.area === "window") setArea("display");
+      if (!devices.regions && last.area === "region") setArea("display");
       // The display and camera chosen before, if they're still there.
       if (!displays.some((d) => String(d.id) === last.displayId)) {
         const main = displays.find((d) => d.main) ?? displays[0];
@@ -162,15 +171,20 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
     setArea("display");
   };
 
-  // Choosing a camera asks macOS for it the first time; if it isn't allowed, the camera
-  // stays off and System Preferences opens at the right place.
+  // Choosing a camera asks the system for it the first time (macOS); if it isn't allowed,
+  // the camera stays off and the system's settings open at the right place.
   const chooseCamera = async (id: string) => {
     if (id === NO_CAMERA) return setCameraId(id);
     try {
       const { camera: access } = await api.permissions();
       const answer = access === "not_asked" ? await api.requestCamera() : access;
       if (answer === "allowed") return setCameraId(id);
-      toast("KreoKit Rec may not use the camera yet. In System Preferences, tick KreoKit Rec under Camera, then choose the camera again.", "error");
+      toast(
+        os === "windows"
+          ? "Windows doesn't let apps use the camera yet. In Settings, turn on camera access for desktop apps, then choose the camera again."
+          : "KreoKit Rec may not use the camera yet. In System Preferences, tick KreoKit Rec under Camera, then choose the camera again.",
+        "error",
+      );
       await api.openPrivacySettings("camera");
     } catch (e) {
       toast(String(e), "error");
@@ -304,7 +318,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
                     </Button>
                   </span>
                 ) : (
-                  !windowSupport.ok && windowSupport.note
+                  (!windowSupport.ok && windowSupport.note) || (!regionSupport.ok && regionSupport.note)
                 )
               }
             >
@@ -325,7 +339,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
                   onChange={(value) => (value === "region" ? chooseRegion() : setArea(value))}
                   options={[
                     { value: "display", label: "Whole display" },
-                    { value: "region", label: "Region…" },
+                    { value: "region", label: "Region…", disabled: !regionSupport.ok },
                     { value: "window", label: "Window", disabled: !windowSupport.ok },
                   ]}
                 />
@@ -371,7 +385,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
             <Field label="Preview">
               <CameraPreview camera={camera} />
             </Field>
-            <Field label="Computer sound" hint={systemSupported ? undefined : "Needs macOS 13 or newer"}>
+            <Field label="Computer sound" hint={systemSupported ? undefined : (systemNote ?? undefined)}>
               <Switch
                 label="Record the computer's sound"
                 checked={systemAudio}
@@ -428,7 +442,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       {removing && (
         <ConfirmDialog
           title="Remove from Recent?"
-          text="The recording stays on this Mac in KreoKit Rec's folder; it only leaves this list."
+          text="The recording stays on this computer in KreoKit Rec's folder; it only leaves this list."
           confirmLabel="Remove"
           onClose={() => setRemoving(null)}
           onConfirm={() => act(() => api.removeFromRecent(removing.id), "Removed from Recent.")}
@@ -437,7 +451,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       {deleting && (
         <ConfirmDialog
           title="Delete recording?"
-          text={`${recordingTitle(deleting)} (${formatDuration(deleting.elapsed_s)}) is deleted from this Mac. This can't be undone.`}
+          text={`${recordingTitle(deleting)} (${formatDuration(deleting.elapsed_s)}) is deleted from this computer. This can't be undone.`}
           confirmLabel="Delete"
           onClose={() => setDeleting(null)}
           onConfirm={() => act(() => api.deleteRecording(deleting.id), "Recording deleted.")}

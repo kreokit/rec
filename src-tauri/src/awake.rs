@@ -13,7 +13,8 @@
 //!   ES_DISPLAY_REQUIRED)` from
 //!   kernel32, which applies to the calling thread; the guard is not `Send`, so it is
 //!   released on the same thread.
-//! - **Linux:** nothing yet.
+//! - **Linux:** `systemd-inhibit --what=idle:sleep` running while the guard lives (GNOME
+//!   and KDE respect it); nothing where systemd-logind is missing.
 
 use std::marker::PhantomData;
 
@@ -22,6 +23,8 @@ use std::marker::PhantomData;
 pub struct KeepAwake {
     #[cfg(target_os = "macos")]
     assertion: Option<u32>,
+    #[cfg(target_os = "linux")]
+    inhibitor: Option<std::process::Child>,
     /// Not `Send`: Windows ties the request to the thread that made it.
     _thread: PhantomData<*const ()>,
 }
@@ -41,6 +44,16 @@ impl KeepAwake {
             #[cfg(windows)]
             win::hold();
             Self {
+                #[cfg(target_os = "linux")]
+                inhibitor: std::process::Command::new("systemd-inhibit")
+                    .args(["--what=idle:sleep", "--who=KreoKit Rec", "--mode=block"])
+                    .arg(format!("--why={reason}"))
+                    .args(["sleep", "infinity"])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                    .ok(),
                 _thread: PhantomData,
             }
         }
@@ -61,6 +74,11 @@ impl Drop for KeepAwake {
         }
         #[cfg(windows)]
         win::release();
+        #[cfg(target_os = "linux")]
+        if let Some(mut child) = self.inhibitor.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
     }
 }
 

@@ -53,6 +53,8 @@ fn recordings(app: &AppHandle) -> tauri::State<'_, Recordings> {
 
 #[derive(Serialize)]
 struct Permissions {
+    /// "macos", "windows" or "linux": which settings the texts name.
+    os: &'static str,
     screen: Access,
     mic: Access,
     camera: Access,
@@ -108,6 +110,7 @@ fn permissions(app: AppHandle) -> Permissions {
             Access::Allowed
         };
         return Permissions {
+            os: std::env::consts::OS,
             screen: access,
             mic: access,
             camera: access,
@@ -121,6 +124,7 @@ fn permissions(app: AppHandle) -> Permissions {
     // matches, and this is how the next start knows to offer the reset.
     let asked = marker.as_ref().is_some_and(|m| m.is_file());
     Permissions {
+        os: std::env::consts::OS,
         screen,
         mic: native::mic_access(),
         camera: native::camera_access(),
@@ -230,11 +234,49 @@ struct Devices {
     displays: Vec<Display>,
     mics: Vec<Mic>,
     cameras: Vec<Camera>,
-    /// The computer sound can be recorded (macOS 13+).
+    /// The computer sound can be recorded; otherwise why not.
     system_audio: bool,
+    system_audio_note: Option<String>,
     /// Windows can be recorded; otherwise why not, for the setup screen.
     windows: bool,
     windows_note: Option<String>,
+    /// A region can be chosen; otherwise why not.
+    regions: bool,
+    regions_note: Option<String>,
+    /// "macos", "windows" or "linux".
+    os: &'static str,
+}
+
+/// Why the computer sound can't be recorded here (`None`: it can).
+fn system_audio_note() -> Option<String> {
+    if native::system_audio_supported() {
+        return None;
+    }
+    Some(
+        if cfg!(target_os = "macos") {
+            "Needs macOS 13 or newer"
+        } else if cfg!(windows) {
+            "No speakers or headphones found"
+        } else {
+            "Needs PipeWire and speakers or headphones"
+        }
+        .into(),
+    )
+}
+
+/// Whether a region can be chosen: on Linux only on X11 without the screen portal (the
+/// portal's dialog chooses a whole display or window).
+fn region_support() -> (bool, Option<String>) {
+    if cfg!(target_os = "linux") && native::window_capture_supported() {
+        return (
+            false,
+            Some(
+                "Choosing a region arrives later on this desktop. Record the screen or a window."
+                    .into(),
+            ),
+        );
+    }
+    (true, None)
 }
 
 /// Window capture on macOS 12 (ScreenCaptureKit, 12.3+): whether it's reliable enough to
@@ -244,10 +286,14 @@ const WINDOWS_ON_MACOS_12: bool = true;
 
 fn window_support() -> (bool, Option<String>) {
     if !native::window_capture_supported() {
-        return (
-            false,
-            Some("Recording a window needs macOS 12.3 or newer. Record a region instead.".into()),
-        );
+        let note = if cfg!(target_os = "macos") {
+            "Recording a window needs macOS 12.3 or newer. Record a region instead."
+        } else if cfg!(windows) {
+            "Recording a window needs Windows 10 version 1903 or newer. Record a region instead."
+        } else {
+            "This desktop can't record single windows. Record the screen instead."
+        };
+        return (false, Some(note.into()));
     }
     if !native::system_audio_supported() && !WINDOWS_ON_MACOS_12 {
         return (
@@ -288,19 +334,28 @@ async fn devices() -> Result<Devices, String> {
                 height: 720,
             }],
             system_audio: true,
+            system_audio_note: None,
             windows: true,
             windows_note: None,
+            regions: true,
+            regions_note: None,
+            os: std::env::consts::OS,
         });
     }
     blocking(|| {
         let (windows, windows_note) = window_support();
+        let (regions, regions_note) = region_support();
         Ok(Devices {
             displays: native::displays(),
             mics: native::mics(),
             cameras: native::cameras(),
             system_audio: native::system_audio_supported(),
+            system_audio_note: system_audio_note(),
             windows,
             windows_note,
+            regions,
+            regions_note,
+            os: std::env::consts::OS,
         })
     })
     .await
