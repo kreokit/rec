@@ -572,7 +572,7 @@ mod portable {
     impl Recorder {
         pub fn start(config: &RecordConfig) -> Result<Recorder, String> {
             let Some(flags) = config.synthetic else {
-                return Err(NOT_YET.into());
+                return system(config);
             };
             let layout = crate::synthetic::screen_layout(config);
             let nv12 = |(width, height)| VideoInput {
@@ -614,15 +614,35 @@ mod portable {
         }
     }
 
-    const NOT_YET: &str =
-        "Recording the real screen on this system arrives in the next test version of KreoKit Rec.";
+    /// A recording from the system's screen, camera and sound.
+    #[cfg(windows)]
+    fn system(config: &RecordConfig) -> Result<Recorder, String> {
+        let (core, sources) = super::win::start(config)?;
+        let pictures = config.screen.is_some() || config.camera.is_some();
+        Ok(Recorder(pipeline::Recorder::new(core, sources, pictures)))
+    }
+
+    #[cfg(not(windows))]
+    fn system(_config: &RecordConfig) -> Result<Recorder, String> {
+        Err("Recording the real screen on this system arrives in the next test version of KreoKit Rec.".into())
+    }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+mod win;
+#[cfg(windows)]
+pub use win::{
+    camera_access, cameras, displays, mic_access, mics, monitor_peak, monitor_start, monitor_stop,
+    preview_frame, preview_start, preview_stop, request_camera_access, request_mic_access,
+    request_screen_access, screen_access, system_audio_supported, window_capture_supported,
+    windows,
+};
+
+#[cfg(target_os = "linux")]
 pub use other::*;
 
-/// Windows and Linux: devices and permissions (the system capture follows in M3).
-#[cfg(not(target_os = "macos"))]
+/// Linux: devices and permissions (the system capture follows in M3).
+#[cfg(target_os = "linux")]
 mod other {
     use super::*;
 
@@ -815,8 +835,8 @@ pub(crate) mod tests {
         report
     }
 
-    // Windows and Linux list their displays with the system capture (M3 steps 10-11).
-    #[cfg(target_os = "macos")]
+    // Linux lists its displays through the portal's dialog instead (M3 step 11).
+    #[cfg(not(target_os = "linux"))]
     #[test]
     fn lists_the_displays() {
         // The JSON must parse (a 1 instead of true for "main" once emptied the list).

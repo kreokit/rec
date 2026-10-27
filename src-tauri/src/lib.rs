@@ -1,3 +1,5 @@
+#[cfg(windows)]
+mod audio;
 mod awake;
 #[cfg(feature = "bench")]
 mod bench;
@@ -197,6 +199,21 @@ fn open_privacy_settings(kind: String) -> Result<(), String> {
             .status()
             .map_err(|e| {
                 format!("System Preferences didn't open ({e}). Open it from the Apple menu, then Security & Privacy > Privacy.")
+            })?;
+    }
+    // Windows: the camera and microphone privacy switches (the screen needs none).
+    #[cfg(windows)]
+    if synthetic().is_none() && kind != "screen" {
+        let page = if kind == "camera" {
+            "ms-settings:privacy-webcam"
+        } else {
+            "ms-settings:privacy-microphone"
+        };
+        std::process::Command::new("explorer.exe")
+            .arg(page)
+            .spawn()
+            .map_err(|e| {
+                format!("Settings didn't open ({e}). Open Settings, then Privacy & security.")
             })?;
     }
     let _ = pane;
