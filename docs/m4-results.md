@@ -86,4 +86,4 @@ Tutorial −16: **213.7 s, 2.8× faster than real time** (VideoToolbox; −16.0 
   the export is the one checked against the preset.
 - "Keep" leaves the loudness as recorded but still keeps true peaks under −1 dBTP (the mic
   and computer sound are added together), as Voice's "Off" does.
-- Open: the user's try of the test app; real devices (own recordings) only with the user's OK.
+- The user tried the test app with a real recording (2026-10-27): trim, bubble, voice and export all work. **M4 done.**
