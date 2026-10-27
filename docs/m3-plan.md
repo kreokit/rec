@@ -1,6 +1,6 @@
 # Proposed M3 plan (camera + computer sound + window/region + Windows/Linux)
 
-**Status:** proposed 2026-10-27, waiting for the user's OK. Order = commit order; every
+**Status:** approved by the user 2026-10-27. **M3 is done when it works and is measured on the dev Mac (macOS 12).** Friends' tests on Windows, Linux and macOS 13+ run in parallel and are required before the M6 release, not for M3. Order = commit order; every
 commit builds and passes `cargo test` and `pnpm test` on its own and is pushed. Capture
 choices are the ones in CLAUDE.md ("Capture choices"); nothing new is chosen without
 measuring first.
@@ -82,9 +82,8 @@ measuring first.
     research showed this). `cargo-deny` + `THIRD-PARTY-LICENSES.md` for every new crate.
 14. **Bench builds for friends** as CI artifacts (Windows .exe, Linux AppImage, macOS
     13+): `--bench check|fresh|sync` ported, plus a short manual checklist (permissions,
-    1080p30 fresh frames, camera, computer sound, key-tap sync, kill-and-recover). Real
-    Windows/Linux/macOS 13+ numbers wait for those runs; M3 is "done" on those systems
-    only after them.
+    1080p30 fresh frames, camera, computer sound, key-tap sync, kill-and-recover). These
+    runs happen in parallel and must pass before the M6 release (not needed for M3).
 
 ## Test app and its permissions
 
@@ -92,14 +91,13 @@ The camera code and the camera usage text need a new build of `KreoKit Rec Test.
 It is ad-hoc signed today, so its permissions are tied to the exact binary: **any rebuild
 loses Screen Recording + Microphone**, and every later M3 rebuild would lose them again.
 
-Proposal: sign the test app with a **local self-signed code-signing certificate**
+Approved: sign the test app with a **local self-signed code-signing certificate**
 ("KreoKit Rec Test (local)", created once in the login keychain, never used for releases).
 macOS then ties the permissions to the identifier + certificate instead of the binary, so
 the user allows Screen Recording, Microphone and Camera **once more** after the first
 signed build, and they survive every rebuild after that. Same identifier
-`com.kreokit.rec.claude-test`, same place `test-build/`. Needs the user's OK (it adds a
-certificate to their keychain; removable any time). Without it: keep ad-hoc signing,
-rebuild as rarely as possible, and the user re-allows after each rebuild.
+`com.kreokit.rec.claude-test`, same place `test-build/`. Removable from Keychain Access any
+time.
 
 ## Not in M3
 
