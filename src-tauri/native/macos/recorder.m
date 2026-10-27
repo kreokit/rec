@@ -30,6 +30,8 @@ static const double kQueueSeconds = 1.0;
 // A frame exactly on a slot boundary belongs to the next slot (synthetic frames land
 // exactly there; without a margin, rounding would decide).
 static const double kTie = 1e-6;
+// When the made-up camera's first picture comes, after the start (the dev Mac's camera: 0.9 s).
+static const double kCameraWarmUp = 1.0;
 // A small gap or overlap in the microphone's timestamps (jitter) is ignored up to this.
 static const int64_t kAudioTolerance = 96; // 2 ms
 
@@ -436,8 +438,15 @@ API_AVAILABLE(macos(12.3))
             p->fresh++;
         } else if (p->current) {
             p->repeated++;
+        } else if (p->frames.count) {
+            // Slots before a source's first picture show that picture (a real camera's
+            // first one comes about 0.9 s after the start, measured 2026-10-27). It stays
+            // queued, so its own slot still gets it as new.
+            p->current = p->frames[0];
+            p->repeated++;
         } else {
-            if (hk - t0 > 3)
+            // Measured from now, not from the slot (which stays at the first one).
+            if ([self now] - t0 - pausedTotal > 3)
                 [self fail:p->camera ? @"No picture arrived from the camera. Check that KreoKit Rec may use the camera and that no other app is using it, then try again."
                                      : @"No picture arrived from the screen. Check that KreoKit Rec may record the screen, then try again."];
             break; // waits for the first picture
@@ -617,7 +626,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
                     CVPixelBufferRelease(pb);
                 }
             }
-            if (self->cameraW && i % (cfps / self->cfg.fps) == 0) {
+            if (self->cameraW && i % (cfps / self->cfg.fps) == 0 && (!self->cfg.synthetic_late_camera || t >= self->t0 + kCameraWarmUp)) {
                 int64_t c = llround((t - self->t0) * self->cfg.fps);
                 CVPixelBufferRef pb = NULL;
                 CVPixelBufferPoolCreatePixelBuffer(NULL, self->synthCameraPool, &pb);
@@ -783,11 +792,21 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
     if (locked) {
         AVCaptureDeviceFormat *format = cameraFormat(dev);
         if (format) dev.activeFormat = format;
-        CMTime frame = CMTimeMake(1, cfg.fps);
         for (AVFrameRateRange *r in dev.activeFormat.videoSupportedFrameRateRanges) {
             if (r.minFrameRate <= cfg.fps + 0.01 && r.maxFrameRate >= cfg.fps - 0.01) {
-                dev.activeVideoMinFrameDuration = frame;
-                dev.activeVideoMaxFrameDuration = frame;
+                // Kept inside the range's own durations: the dev Mac's FaceTime camera
+                // offers 30 fps as 1/30.00003 s and throws on an exact 1/30 (2026-10-27).
+                CMTime frame = CMTimeMake(1, cfg.fps);
+                if (CMTimeCompare(frame, r.minFrameDuration) < 0) frame = r.minFrameDuration;
+                if (CMTimeCompare(frame, r.maxFrameDuration) > 0) frame = r.maxFrameDuration;
+                // Never fatal: without the lock the camera keeps its own rate and the
+                // slots still give one frame per 1/30 s.
+                @try {
+                    dev.activeVideoMinFrameDuration = frame;
+                    dev.activeVideoMaxFrameDuration = frame;
+                } @catch (NSException *ex) {
+                    NSLog(@"camera frame rate not set: %@", ex.reason);
+                }
                 break;
             }
         }

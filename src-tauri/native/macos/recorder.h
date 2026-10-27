@@ -37,10 +37,12 @@ typedef struct {
     // Tests: generated sources instead of real devices (a frame counter on the screen and
     // the camera, a click every second on the mic, see recorder.m). synthetic_fast runs them as fast as
     // the encoder allows on their own clock (a simulated hour in minutes);
-    // synthetic_static freezes the picture for 2 s of every 10 s (nothing changes on screen).
+    // synthetic_static freezes the picture for 2 s of every 10 s (nothing changes on screen);
+    // synthetic_late_camera sends the camera's first picture 1 s after the start, as a real one.
     int synthetic;
     int synthetic_fast;
     int synthetic_static;
+    int synthetic_late_camera;
 } KrRecConfig;
 
 typedef struct {

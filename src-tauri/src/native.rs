@@ -48,6 +48,9 @@ pub struct Synthetic {
     pub fast: bool,
     /// The picture stands still for 2 s of every 10 s.
     pub still_periods: bool,
+    /// The camera's first picture comes 1 s after the start, as with a real camera.
+    #[serde(default)]
+    pub late_camera: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -173,6 +176,7 @@ mod macos {
         synthetic: c_int,
         synthetic_fast: c_int,
         synthetic_static: c_int,
+        synthetic_late_camera: c_int,
     }
 
     #[repr(C)]
@@ -312,6 +316,7 @@ mod macos {
                 synthetic: config.synthetic.is_some() as c_int,
                 synthetic_fast: synthetic.fast as c_int,
                 synthetic_static: synthetic.still_periods as c_int,
+                synthetic_late_camera: synthetic.late_camera as c_int,
             };
             let mut error = [0u8; 1024];
             let rec = unsafe { kr_rec_start(&raw, error.as_mut_ptr().cast(), error.len()) };
@@ -603,6 +608,7 @@ pub(crate) mod tests {
             synthetic: Some(Synthetic {
                 fast: true,
                 still_periods: still,
+                late_camera: false,
             }),
         }
     }
@@ -809,6 +815,34 @@ pub(crate) mod tests {
         );
         let camera = check_camera(&dir, &status);
         late_only(&camera, status.camera_frames_late, "camera");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_late_camera_fills_the_start_with_its_first_picture() {
+        let _timing = alongside();
+        // A real camera's first picture comes ~0.9 s after the start: the slots before it
+        // show it, then every slot gets its own picture, and the camera keeps the screen's length.
+        let dir = temp_dir("late-camera");
+        let mut config = synthetic(dir.clone(), 640, 360, false);
+        config.synthetic = Some(Synthetic {
+            fast: true,
+            late_camera: true,
+            ..Synthetic::default()
+        });
+        let rec = Recorder::start(&config).unwrap();
+        wait_for(&rec, 5.0);
+        let (status, error) = rec.stop();
+        assert_eq!(error, None);
+        assert_eq!(status.camera_frames, status.frames, "{status:?}");
+        assert_eq!(status.camera_frames_repeated, 30, "{status:?}");
+        assert_eq!(
+            status.camera_frames_new,
+            status.camera_frames - 30,
+            "{status:?}"
+        );
+        let report = crate::check::check(&dir, Some(&status), 30);
+        assert!(report.problems.is_empty(), "{report:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
