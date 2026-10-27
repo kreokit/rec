@@ -1,7 +1,7 @@
 # KreoKit Rec: build spec for Claude Code
 
 Read this before every task. It is the source of truth for scope and architecture.
-**Status (2026-10-27):** M1 done (`docs/capture-research.md`). **M2 done**: screen + mic on macOS (native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen); synthetic tests (simulated hour, kill -9 recovery) and real-device measurements (`docs/m2-results.md`: 99.86 % fresh at 60→30 fps, sync within a frame plus ≈32 ms display delay, crash loss 0.15–0.4 s); the user tried the test app and everything worked. **Next: M3** (camera + computer sound + window/region + Windows/Linux): plan in `docs/m3-plan.md` (approved). **M3 is done when it works and is measured on the dev Mac (macOS 12)**; friends' tests on Windows, Linux and macOS 13+ run in parallel and are required before the M6 release. See "Capture choices" and "Testing on the dev Mac" below.
+**Status (2026-10-27):** M1 done (`docs/capture-research.md`). **M2 done**: screen + mic on macOS (native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen); synthetic tests (simulated hour, kill -9 recovery) and real-device measurements (`docs/m2-results.md`: 99.86 % fresh at 60→30 fps, sync within a frame plus ≈32 ms display delay, crash loss 0.15–0.4 s); the user tried the test app and everything worked. **Next: M3** (camera + computer sound + window/region + Windows/Linux): plan in `docs/m3-plan.md` (approved); camera measured on the dev Mac (`docs/m3-results.md`). **M3 is done when it works and is measured on the dev Mac (macOS 12)**; friends' tests on Windows, Linux and macOS 13+ run in parallel and are required before the M6 release. See "Capture choices" and "Testing on the dev Mac" below.
 App #5 of the KreoKit suite. Published: KreoKit Captions (`kreokit/captions`), Cutout (`kreokit/cutout`), Clips (`kreokit/clips`), Voice (`kreokit/voice`). KreoKit Design was dropped and archived. Reuse the published apps wherever possible.
 
 ## What we are building
@@ -54,7 +54,7 @@ The hard part. Each system is different; research and measure before committing.
 
 ## Capture choices (decided in M1/M2, confirmed by the user)
 
-Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`.
+Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`, `docs/m3-results.md`.
 
 | | Screen | Camera, mic | Computer sound | Encode + write |
 |---|---|---|---|---|
@@ -68,7 +68,7 @@ Details and numbers: `docs/capture-research.md`, `docs/m2-results.md`.
 - Screen: **capture at 60 fps, keep one frame per 1/30 s slot** (30 fps capture gave only 98.1 % fresh). A frame exactly on a slot boundary goes to the next slot. Capture NV12 (`420v`) wherever offered (BGRA doubles CPU).
 - One fragmented MP4 per source, all on the host clock (`CMSyncConvertTime` for AVCaptureSession buffers); keyframe 1 s, fragment 1 s, regular `fsync`; a ≈1 s queue in front of each writer, never drop on "not ready"; overload is counted and shown, never silent.
 - Camera (M3): fix its frame rate (min = max frame duration) so it doesn't halve in low light; measure its real timing against the mic (open question in the research).
-- Region (M3): a source rectangle on CGDisplayStream / ScreenCaptureKit (cost like full screen), output in the region's shape. Chosen in a see-through overlay window (`region_open`, `RegionOverlay.tsx`) above the menu bar (`native/macos/window.m`); needs Tauri's `macos-private-api` (transparent windows; fine outside the App Store). The overlay confirms with "Use region"/Enter and returns to Home, where Record starts (Home holds camera/mic).
+- Region (M3): a source rectangle on CGDisplayStream / ScreenCaptureKit (cost like full screen), output in the region's shape. **On macOS 12 the CGDisplayStream source rectangle records black** (only the pointer; measured 2026-10-27, `docs/m3-results.md`): to be redone as whole display + crop, as OBS does. Chosen in a see-through overlay window (`region_open`, `RegionOverlay.tsx`) above the menu bar (`native/macos/window.m`); needs Tauri's `macos-private-api` (transparent windows; fine outside the App Store). The overlay confirms with "Use region"/Enter and returns to Home, where Record starts (Home holds camera/mic).
 
 ## Testing on the dev Mac (test app)
 

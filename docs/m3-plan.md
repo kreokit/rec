@@ -26,8 +26,9 @@ measuring first.
    "Needs macOS 13 or newer". **Can't be tried on the dev Mac**: built and unit-tested
    here, checked on CI macOS 14/15 as far as permissions allow there, and on a friend's
    macOS 13+ Mac (manual checklist).
-5. **Region capture.** *(Built 2026-10-27, tried with synthetic sources; the crop itself is
-   checked in step 8 on the real screen, with the user's OK.)* CGDisplayStream / ScreenCaptureKit with a source rectangle, so the
+5. **Region capture.** *(Built 2026-10-27, tried with synthetic sources. On the real screen
+   (step 8) CGDisplayStream's source rectangle gives a black picture on macOS 12: to be
+   redone as whole-display capture + crop, see `docs/m3-results.md`.)* CGDisplayStream / ScreenCaptureKit with a source rectangle, so the
    cost stays like full screen. Choosing it: a see-through overlay on the chosen display,
    drag a rectangle, size shown, Enter/Record to confirm, Esc to cancel. Output keeps the
    region's shape, scaled to 1080p/720p at most, even sizes.
@@ -43,7 +44,9 @@ measuring first.
    computer sound: all tracks start together, same length (± one frame), camera slots
    without gaps, sync of every audio track against the picture; recovery cuts all tracks
    to the shortest. Pause/resume applies to every track.
-8. **Real-device test on the dev Mac (with the user's OK):** camera fresh-frame and timing
+8. **Real-device test on the dev Mac (with the user's OK):** *(Done 2026-10-27 for the
+   camera: `docs/m3-results.md`; camera − mic −4.9 ms, so no correction; the region crop
+   failed and is redone in step 5.)* camera fresh-frame and timing
    run (10 min screen 1080p + camera 720p + mic; CPU, missing frames, drift), and the
    **camera tap/clap test**: the user claps or taps the desk in view of the camera about
    once a second; the bench finds the hands meeting (largest frame-to-frame change) and
