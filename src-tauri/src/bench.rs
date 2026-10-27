@@ -73,8 +73,7 @@ pub fn analyze(dir: &Path) -> Result<Value, String> {
         .collect();
     let flashes = flash_times(&dir.join("screen.mp4"), &rect)?;
     let (samples, start) = testpattern::read_audio(&dir.join("mic.mp4"))?;
-    let peak = samples.iter().fold(0f32, |m, s| m.max(s.abs()));
-    let sounds = testpattern::onsets(&samples, start, (0.3 * peak).max(0.02), 0.3);
+    let sounds = testpattern::onsets(&samples, start, click_threshold(&samples), 0.3);
     let presses: Vec<f64> = info["presses"]
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_f64).collect())
@@ -90,6 +89,23 @@ pub fn analyze(dir: &Path) -> Result<Value, String> {
         "sound_minus_press_ms": offsets(&sounds, &presses),
         "flash_minus_press_ms": offsets(&flashes, &presses),
     }))
+}
+
+/// The level a key click must reach: 30 dB above the room's quiet level (the 20th
+/// percentile of 10 ms windows), at least -50 dBFS. Measured 2026-10-27 on the dev Mac:
+/// quiet -84 dB, firm space-bar presses -3 to -27 dB peak; a share of the loudest press
+/// missed most of them.
+fn click_threshold(samples: &[f32]) -> f32 {
+    let mut rms: Vec<f32> = samples
+        .chunks(480)
+        .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
+        .collect();
+    if rms.is_empty() {
+        return 1.0;
+    }
+    rms.sort_by(f32::total_cmp);
+    let quiet = rms[rms.len() / 5];
+    (quiet * 31.6).max(0.003_16)
 }
 
 /// How old the shown counter is at each frame: frame time minus the counter's own time,
@@ -174,6 +190,19 @@ fn flash_times(video: &Path, rect: &[u32]) -> Result<Vec<f64>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finds_quiet_clicks_above_the_room() {
+        // A quiet room (-80 dB) with a -60 dB click and a -20 dB one.
+        let mut s: Vec<f32> = (0..96_000)
+            .map(|i| 1e-4 * ((i % 7) as f32 - 3.0) / 3.0)
+            .collect();
+        s[24_000] = 0.001;
+        s[72_000] = 0.1;
+        let t = click_threshold(&s);
+        assert!(t > 0.001 && t < 0.1, "{t}");
+        assert_eq!(testpattern::onsets(&s, 0.0, t, 0.3), vec![1.5]);
+    }
 
     #[test]
     fn pairs_nearest_events() {
