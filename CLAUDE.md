@@ -1,7 +1,7 @@
 # KreoKit Rec: build spec for Claude Code
 
 Read this before every task. It is the source of truth for scope and architecture.
-**Status (2026-10-27):** M1 done (`docs/capture-research.md`); the user confirmed CGDisplayStream on macOS 12, ScreenCaptureKit on 13+. M2 built (screen + mic on macOS: native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen), tested on synthetic sources (incl. a simulated hour and kill -9 recovery). **Next: the real-device measurements on the user's Mac (only with their OK): fresh frames at 60→30 fps, the tap sync test, crash safety; then the user tries M2** with the test build (`test-build/KreoKit Rec Test.app`, identifier `com.kreokit.rec.claude-test`, `--features bench`).
+**Status (2026-10-27):** M1 done (`docs/capture-research.md`); the user confirmed CGDisplayStream on macOS 12, ScreenCaptureKit on 13+. M2 built (screen + mic on macOS: native recorder `src-tauri/native/macos`, sessions, check, recovery, permissions, Home, recording screen), tested on synthetic sources (incl. a simulated hour and kill -9 recovery). Real-device measurements done with the user's OK (`docs/m2-results.md`: 99.86 % fresh at 60→30 fps, sync within a frame plus ≈32 ms display delay, crash loss 0.15–0.4 s; recordings deleted). **Next: the user tries M2** with `test-build/KreoKit Rec Test.app` (identifier `com.kreokit.rec.claude-test`).
 App #5 of the KreoKit suite. Published: KreoKit Captions (`kreokit/captions`), Cutout (`kreokit/cutout`), Clips (`kreokit/clips`), Voice (`kreokit/voice`). KreoKit Design was dropped and archived. Reuse the published apps wherever possible.
 
 ## What we are building
