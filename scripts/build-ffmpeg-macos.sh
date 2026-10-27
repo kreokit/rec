@@ -48,11 +48,14 @@ done
 ASM=()
 [[ "$ARCH" == "arm64" ]] || ASM=(--x86asmexe=nasm)
 
+# -liconv: the system's libiconv, named explicitly (on the macos-15 runners of 2026-10
+# configure found iconv without it and the link then failed).
 (cd "$WORK/ffmpeg-9.0.2" &&
   ./configure --prefix="$OUT" --arch="$ARCH" --target-os=darwin \
     --cc="clang -arch $ARCH" --cxx="clang++ -arch $ARCH" \
     --extra-cflags="-mmacosx-version-min=$MIN_MACOS" \
     --extra-ldflags="-mmacosx-version-min=$MIN_MACOS" \
+    --extra-libs="-liconv" \
     ${ASM[@]+"${ASM[@]}"} \
     --disable-debug --disable-doc --disable-ffplay --disable-network \
     --disable-autodetect \
