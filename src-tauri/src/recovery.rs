@@ -136,6 +136,7 @@ mod tests {
                 fps: 30,
             }),
             mic: Some("Microphone".into()),
+            camera: None,
             elapsed_s: elapsed,
             pauses: 0,
             check: None,

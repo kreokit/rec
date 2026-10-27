@@ -1,5 +1,5 @@
 //! Recording sessions: one folder per recording in the app data folder (`screen.mp4`,
-//! `mic.mp4`, `session.json`), the states idle → recording ⇄ paused → finishing → done, and
+//! `camera.mp4`, `mic.mp4`, `session.json`), the states idle → recording ⇄ paused → finishing → done, and
 //! the Recent list.
 //!
 //! `session.json` is rewritten (atomically) on every change and once a second while
@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::check::{self, Check};
-use crate::native::{RecordConfig, ScreenApi, ScreenConfig, Status};
+use crate::native::{CameraConfig, RecordConfig, ScreenApi, ScreenConfig, Status};
 use crate::{awake, disk};
 
 /// Recording stops by itself when less than this is free (the files stay playable).
@@ -54,6 +54,13 @@ pub struct ScreenInfo {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraInfo {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     /// The folder's name, e.g. "2026-10-27-143205".
     pub id: String,
@@ -63,6 +70,8 @@ pub struct Session {
     pub screen: Option<ScreenInfo>,
     /// The microphone's name.
     pub mic: Option<String>,
+    #[serde(default)]
+    pub camera: Option<CameraInfo>,
     /// Seconds recorded (pauses excluded); while recording, as of the last heartbeat.
     pub elapsed_s: f64,
     pub pauses: u32,
@@ -86,6 +95,16 @@ pub struct Options {
     /// `None`: no microphone; `Some("")`: the default one.
     pub mic_id: Option<String>,
     pub mic_name: Option<String>,
+    /// `None`: no camera; `Some("")`: the default one.
+    #[serde(default)]
+    pub camera_id: Option<String>,
+    #[serde(default)]
+    pub camera_name: Option<String>,
+    /// The camera's size (`Camera` in native.rs): recorded as it is.
+    #[serde(default)]
+    pub camera_width: u32,
+    #[serde(default)]
+    pub camera_height: u32,
 }
 
 /// The output size for a display at a quality: the display's shape, `quality` pixels high
@@ -98,14 +117,24 @@ pub fn output_size(width: u32, height: u32, quality: u32) -> (u32, u32) {
     (even(width as f64 * scale), even(height as f64 * scale))
 }
 
+/// The camera's recording size: its own (up to 720p, as the system reports it), even
+/// numbers; 1280x720 when unknown.
+pub fn camera_size(width: u32, height: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (1280, 720);
+    }
+    output_size(width, height, 720)
+}
+
 /// H.264 bits per second for a size at 30 fps (≈ 7.3 Mbit/s at 1728x1080).
 pub fn video_bitrate(width: u32, height: u32) -> u32 {
     (width as f64 * height as f64 * 30.0 * 0.13) as u32
 }
 
-/// The expected file size per minute: picture + 128 kbit/s sound.
-pub fn bytes_per_minute(width: u32, height: u32, mic: bool) -> u64 {
-    (video_bitrate(width, height) as u64 + if mic { 128_000 } else { 0 }) / 8 * 60
+/// The expected file size per minute: screen + camera (`None`: off) + 128 kbit/s sound.
+pub fn bytes_per_minute(width: u32, height: u32, camera: Option<(u32, u32)>, mic: bool) -> u64 {
+    let camera = camera.map_or(0, |(w, h)| video_bitrate(w, h) as u64);
+    (video_bitrate(width, height) as u64 + camera + if mic { 128_000 } else { 0 }) / 8 * 60
 }
 
 /// A running recording as the backend sees it (native.rs, or a fake in tests).
@@ -271,6 +300,10 @@ impl Recordings {
             options.display_height,
             options.quality,
         );
+        let camera = options
+            .camera_id
+            .as_ref()
+            .map(|_| camera_size(options.camera_width, options.camera_height));
         let session = Session {
             id,
             created_at,
@@ -286,6 +319,14 @@ impl Recordings {
                     .mic_name
                     .clone()
                     .unwrap_or_else(|| "Microphone".into())
+            }),
+            camera: camera.map(|(width, height)| CameraInfo {
+                name: options
+                    .camera_name
+                    .clone()
+                    .unwrap_or_else(|| "Camera".into()),
+                width,
+                height,
             }),
             elapsed_s: 0.0,
             pauses: 0,
@@ -306,7 +347,12 @@ impl Recordings {
                 bitrate: video_bitrate(width, height),
             }),
             mic: options.mic_id.clone(),
-            camera: None,
+            camera: camera.map(|(width, height)| CameraConfig {
+                id: options.camera_id.clone().unwrap_or_default(),
+                width,
+                height,
+                bitrate: video_bitrate(width, height),
+            }),
             synthetic,
         };
         let capture = match self.backend.start(&config) {
@@ -608,6 +654,10 @@ pub mod tests {
             quality: 1080,
             mic_id: Some(String::new()),
             mic_name: Some("MacBook Pro Microphone".into()),
+            camera_id: None,
+            camera_name: None,
+            camera_width: 0,
+            camera_height: 0,
         }
     }
 
@@ -630,8 +680,15 @@ pub mod tests {
         assert_eq!(output_size(5120, 1440, 1080), (3840, 1080));
         assert_eq!(output_size(1366, 768, 720), (1280, 720));
         // About 55 MB a minute at 1728x1080 with the microphone.
-        let mb = bytes_per_minute(1728, 1080, true) / 1_000_000;
+        let mb = bytes_per_minute(1728, 1080, None, true) / 1_000_000;
         assert!((50..60).contains(&mb), "{mb}");
+        // The camera at 720p adds about 27 MB.
+        let mb = bytes_per_minute(1728, 1080, Some((1280, 720)), true) / 1_000_000;
+        assert!((78..88).contains(&mb), "{mb}");
+        assert_eq!(camera_size(1280, 720), (1280, 720));
+        assert_eq!(camera_size(640, 480), (640, 480));
+        assert_eq!(camera_size(1279, 721), (1276, 720));
+        assert_eq!(camera_size(0, 0), (1280, 720));
     }
 
     /// Needs ffmpeg: `cargo test -- --ignored`.
@@ -674,6 +731,43 @@ pub mod tests {
         recordings.delete(&done.id).unwrap();
         assert!(!root.join(&done.id).exists());
         assert!(recordings.delete("../outside").is_err());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn records_the_chosen_camera_at_its_size() {
+        // Keeps what it was asked to record, then refuses (no files needed).
+        struct Keeps(Mutex<Option<RecordConfig>>);
+        impl Backend for Keeps {
+            fn start(&self, config: &RecordConfig) -> Result<Box<dyn Capture>, String> {
+                *self.0.lock().unwrap() = Some(config.clone());
+                Err("stop here".into())
+            }
+        }
+        let root = temp_root("camera");
+        let backend = Arc::new(Keeps(Mutex::new(None)));
+        struct Shared(Arc<Keeps>);
+        impl Backend for Shared {
+            fn start(&self, config: &RecordConfig) -> Result<Box<dyn Capture>, String> {
+                self.0.start(config)
+            }
+        }
+        let recordings = Recordings::new(root.clone(), Box::new(Shared(backend.clone())));
+        let mut opts = options();
+        opts.camera_id = Some("cam-1".into());
+        opts.camera_name = Some("FaceTime HD Camera".into());
+        (opts.camera_width, opts.camera_height) = (1280, 720);
+        assert!(recordings.start(&opts).is_err());
+        let config = backend.0.lock().unwrap().take().unwrap();
+        let camera = config.camera.unwrap();
+        assert_eq!(
+            (camera.id.as_str(), camera.width, camera.height),
+            ("cam-1", 1280, 720)
+        );
+        assert_eq!(camera.bitrate, video_bitrate(1280, 720));
+        // Without a camera: none recorded.
+        assert!(recordings.start(&options()).is_err());
+        assert_eq!(backend.0.lock().unwrap().take().unwrap().camera, None);
         let _ = fs::remove_dir_all(&root);
     }
 

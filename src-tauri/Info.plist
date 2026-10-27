@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Merged into the app's Info.plist by Tauri. macOS shows this text when it asks for the
-     microphone, and closes an app that asks without it. -->
+<!-- Merged into the app's Info.plist by Tauri. macOS shows these texts when it asks for the
+     microphone or the camera, and closes an app that asks without them. -->
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>KreoKit Rec records your voice with the screen. The recording stays on this Mac.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>KreoKit Rec records your camera with the screen, if you turn it on. The recording stays on this Mac.</string>
 </dict>
 </plist>

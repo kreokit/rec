@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Check, Mic, Monitor, RotateCw } from "lucide-react";
+import { Camera, Check, Mic, Monitor, RotateCw } from "lucide-react";
 import { Permissions as PermissionState, api } from "../lib/api";
 import { Button, ICON_STROKE, toast } from "../ui";
 import { TopBar } from "./TopBar";
@@ -54,6 +54,16 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
     }
   };
 
+  const allowCamera = async () => {
+    try {
+      const answer = state.camera === "not_asked" ? await api.requestCamera() : state.camera;
+      if (answer === "denied") await api.openPrivacySettings("camera");
+      setState(await api.permissions());
+    } catch (e) {
+      fail(e);
+    }
+  };
+
   const screenOk = state.screen === "allowed";
   const stuck = !screenOk && !screenAsked && state.screen_asked_before;
   const micOk = state.mic === "allowed";
@@ -64,7 +74,8 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
       <main className="permissions">
         <h1 className="permissions-title">Before you record</h1>
         <p className="permissions-intro">
-          macOS asks you to allow screen recording and the microphone for each app. Everything stays on this Mac.
+          macOS asks you to allow screen recording, the microphone and the camera for each app. Everything stays on
+          this Mac.
         </p>
 
         <section className="permission-row">
@@ -142,6 +153,28 @@ export function Permissions({ initial, onDone }: { initial: PermissionState; onD
           ) : (
             <Button variant={screenOk ? "primary" : "secondary"} onClick={() => void allowMic()}>
               {state.mic === "denied" ? "Open System Preferences" : "Allow…"}
+            </Button>
+          )}
+        </section>
+
+        <section className="permission-row">
+          <span className="permission-icon">
+            <Camera size={20} strokeWidth={ICON_STROKE} aria-hidden />
+          </span>
+          <div className="permission-text">
+            <h2>Camera</h2>
+            <p>Only if you want yourself in the video. You can also allow it later, when you choose a camera.</p>
+            {state.camera === "denied" && (
+              <p className="permission-hint">
+                Not allowed yet: in System Preferences, tick KreoKit Rec under Camera. It works right away.
+              </p>
+            )}
+          </div>
+          {state.camera === "allowed" ? (
+            <Allowed />
+          ) : (
+            <Button variant="secondary" onClick={() => void allowCamera()}>
+              {state.camera === "denied" ? "Open System Preferences" : "Allow…"}
             </Button>
           )}
         </section>

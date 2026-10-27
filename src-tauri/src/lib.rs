@@ -174,12 +174,13 @@ fn reset_screen_permission(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// Opens System Preferences (System Settings) at Screen Recording or Microphone.
+/// Opens System Preferences (System Settings) at Screen Recording, Microphone or Camera.
 #[tauri::command]
 fn open_privacy_settings(kind: String) -> Result<(), String> {
     let pane = match kind.as_str() {
         "screen" => "Privacy_ScreenCapture",
         "mic" => "Privacy_Microphone",
+        "camera" => "Privacy_Camera",
         _ => return Err("unknown setting".into()),
     };
     #[cfg(target_os = "macos")]
@@ -252,17 +253,26 @@ struct Estimate {
     free_bytes: Option<u64>,
 }
 
-/// The output size and file size per minute for a display at a quality, and the space
-/// left for recordings.
+/// The output size and file size per minute for a display at a quality (plus the camera
+/// at its size, 0 × 0 when off), and the space left for recordings.
 #[tauri::command]
-fn estimate(app: AppHandle, width: u32, height: u32, quality: u32, mic: bool) -> Estimate {
+fn estimate(
+    app: AppHandle,
+    width: u32,
+    height: u32,
+    quality: u32,
+    camera_width: u32,
+    camera_height: u32,
+    mic: bool,
+) -> Estimate {
     let (w, h) = sessions::output_size(width, height, quality);
+    let camera = (camera_width > 0).then(|| sessions::camera_size(camera_width, camera_height));
     let root = recordings(&app).root().to_path_buf();
     let _ = std::fs::create_dir_all(&root);
     Estimate {
         width: w,
         height: h,
-        bytes_per_minute: sessions::bytes_per_minute(w, h, mic),
+        bytes_per_minute: sessions::bytes_per_minute(w, h, camera, mic),
         free_bytes: disk::free_bytes(&root),
     }
 }

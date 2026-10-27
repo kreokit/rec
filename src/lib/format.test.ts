@@ -8,6 +8,7 @@ const session = (over: Partial<Session> = {}): Session => ({
   state: "done",
   screen: { display: "Built-in display", width: 1728, height: 1080, fps: 30 },
   mic: "MacBook Pro Microphone",
+  camera: null,
   elapsed_s: 725,
   pauses: 0,
   check: {

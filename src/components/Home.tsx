@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Trash2, TriangleAlert, Video } from "lucide-react";
-import { Display, Estimate, Mic as MicDevice, Options, Session, api } from "../lib/api";
+import { Camera, Display, Estimate, Mic as MicDevice, Options, Session, api } from "../lib/api";
 import { checkSummary, clockTime, formatBytes, formatDuration, formatRoom, recordingTitle } from "../lib/format";
 import { Button, Field, ICON_STROKE, Menu, MenuEntry, Segmented, Select, toast, useContextMenu } from "../ui";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -9,6 +9,7 @@ import { TopBar } from "./TopBar";
 import "../styles/home.css";
 
 const NO_MIC = "none";
+const NO_CAMERA = "none";
 
 /** Home: recover a cut-off recording, set up and start a new one, or find a recent one. */
 export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (session: Session) => void }) {
@@ -16,6 +17,9 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   const [mics, setMics] = useState<MicDevice[]>([]);
   const [displayId, setDisplayId] = useState<string>("");
   const [micId, setMicId] = useState<string>(NO_MIC);
+  const [cameras, setCameras] = useState<Camera[]>([]);
+  // Off until chosen: the camera is optional.
+  const [cameraId, setCameraId] = useState<string>(NO_CAMERA);
   const [quality, setQuality] = useState<"1080" | "720">("1080");
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [recent, setRecent] = useState<Session[] | null>(null);
@@ -31,9 +35,10 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   useEffect(refresh, [refresh]);
 
   useEffect(() => {
-    api.devices().then(({ displays, mics }) => {
+    api.devices().then(({ displays, mics, cameras }) => {
       setDisplays(displays);
       setMics(mics);
+      setCameras(cameras);
       const main = displays.find((d) => d.main) ?? displays[0];
       if (main) setDisplayId(String(main.id));
       const mic = mics.find((m) => m.default) ?? mics[0];
@@ -43,12 +48,30 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
 
   const display = displays.find((d) => String(d.id) === displayId);
   const mic = mics.find((m) => m.id === micId);
+  const camera = cameras.find((c) => c.id === cameraId);
   const peak = useMonitorPeak(!!mic);
 
   useEffect(() => {
     if (!display) return;
-    api.estimate(display.width, display.height, Number(quality), !!mic).then(setEstimate, () => setEstimate(null));
-  }, [display, quality, mic]);
+    api
+      .estimate(display.width, display.height, Number(quality), camera?.width ?? 0, camera?.height ?? 0, !!mic)
+      .then(setEstimate, () => setEstimate(null));
+  }, [display, quality, mic, camera]);
+
+  // Choosing a camera asks macOS for it the first time; if it isn't allowed, the camera
+  // stays off and System Preferences opens at the right place.
+  const chooseCamera = async (id: string) => {
+    if (id === NO_CAMERA) return setCameraId(id);
+    try {
+      const { camera: access } = await api.permissions();
+      const answer = access === "not_asked" ? await api.requestCamera() : access;
+      if (answer === "allowed") return setCameraId(id);
+      toast("KreoKit Rec may not use the camera yet. In System Preferences, tick KreoKit Rec under Camera, then choose the camera again.", "error");
+      await api.openPrivacySettings("camera");
+    } catch (e) {
+      toast(String(e), "error");
+    }
+  };
 
   // The level meter listens while a microphone is chosen.
   useEffect(() => {
@@ -71,6 +94,10 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       quality: Number(quality),
       mic_id: mic ? mic.id : null,
       mic_name: mic ? mic.name : null,
+      camera_id: camera ? camera.id : null,
+      camera_name: camera ? camera.name : null,
+      camera_width: camera?.width ?? 0,
+      camera_height: camera?.height ?? 0,
     };
     setBusy(true);
     try {
@@ -110,6 +137,14 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       { value: NO_MIC, label: micAllowed ? "No microphone" : "No microphone (not allowed)" },
     ],
     [mics, micAllowed],
+  );
+
+  const cameraOptions = useMemo(
+    () => [
+      { value: NO_CAMERA, label: "No camera" },
+      ...cameras.map((c) => ({ value: c.id, label: c.name, hint: `${c.height}p` })),
+    ],
+    [cameras],
   );
 
   return (
@@ -167,6 +202,14 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
             </Field>
             <Field label="Level">
               <LevelMeter peak={peak} off={!mic} />
+            </Field>
+            <Field label="Camera" hint={cameras.length === 0 ? "No camera found" : undefined}>
+              <Select
+                label="Camera"
+                value={cameraId}
+                onChange={(id) => void chooseCamera(id)}
+                options={cameraOptions}
+              />
             </Field>
           </div>
           <div className="setup-footer">
@@ -270,6 +313,7 @@ function RecentRow({
           <span className="recent-name">{recordingTitle(session)}</span>
           <span className="recent-meta">
             {formatDuration(session.elapsed_s)} · {size}
+            {session.camera ? " · Camera" : ""}
             {session.mic ? " · Microphone" : ""}
             {session.state === "recovered" ? " · Recovered" : ""}
           </span>

@@ -6,6 +6,7 @@ export type Access = "allowed" | "denied" | "not_asked";
 export interface Permissions {
   screen: Access;
   mic: Access;
+  camera: Access;
   /** macOS 12: a new Screen Recording permission applies after a restart. */
   restart_after_screen: boolean;
   /** Asked in an earlier run and still not allowed (not ticked, or tied to an older copy). */
@@ -26,6 +27,15 @@ export interface Mic {
   default: boolean;
 }
 
+export interface Camera {
+  id: string;
+  name: string;
+  default: boolean;
+  /** The largest size it delivers at 30 fps, up to 720p: recorded at this size. */
+  width: number;
+  height: number;
+}
+
 export interface Estimate {
   width: number;
   height: number;
@@ -42,6 +52,12 @@ export interface Status {
   frames_repeated: number;
   frames_late: number;
   frames_dropped: number;
+  camera_frames: number;
+  camera_frames_new: number;
+  camera_frames_repeated: number;
+  camera_frames_late: number;
+  camera_frames_dropped: number;
+  camera_frames_lost: number;
   audio_samples: number;
   audio_filled: number;
   audio_dropped: number;
@@ -74,6 +90,7 @@ export interface Session {
   state: State;
   screen: { display: string; width: number; height: number; fps: number } | null;
   mic: string | null;
+  camera: { name: string; width: number; height: number } | null;
   elapsed_s: number;
   pauses: number;
   check: Check | null;
@@ -95,18 +112,24 @@ export interface Options {
   quality: number;
   mic_id: string | null;
   mic_name: string | null;
+  camera_id: string | null;
+  camera_name: string | null;
+  camera_width: number;
+  camera_height: number;
 }
 
 export const api = {
   permissions: () => invoke<Permissions>("permissions"),
   requestMic: () => invoke<Access>("request_mic"),
+  requestCamera: () => invoke<Access>("request_camera"),
   requestScreen: () => invoke<void>("request_screen"),
   resetScreenPermission: () => invoke<void>("reset_screen_permission"),
-  openPrivacySettings: (kind: "screen" | "mic") => invoke<void>("open_privacy_settings", { kind }),
+  openPrivacySettings: (kind: "screen" | "mic" | "camera") => invoke<void>("open_privacy_settings", { kind }),
   restartApp: () => invoke<void>("restart_app"),
-  devices: () => invoke<{ displays: Display[]; mics: Mic[] }>("devices"),
-  estimate: (width: number, height: number, quality: number, mic: boolean) =>
-    invoke<Estimate>("estimate", { width, height, quality, mic }),
+  devices: () => invoke<{ displays: Display[]; mics: Mic[]; cameras: Camera[] }>("devices"),
+  /** The camera's size, or 0 × 0 when it's off. */
+  estimate: (width: number, height: number, quality: number, cameraWidth: number, cameraHeight: number, mic: boolean) =>
+    invoke<Estimate>("estimate", { width, height, quality, cameraWidth, cameraHeight, mic }),
   monitorStart: (micId: string) => invoke<void>("monitor_start", { micId }),
   monitorLevel: () => invoke<number>("monitor_level"),
   monitorStop: () => invoke<void>("monitor_stop"),
