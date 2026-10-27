@@ -39,3 +39,6 @@ __pycache__/
 # Capture research prototypes
 research/**/target/
 research/**/Cargo.lock
+
+# Test builds for trying the app on the dev Mac
+/test-build/
