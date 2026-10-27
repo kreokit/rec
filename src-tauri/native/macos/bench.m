@@ -114,6 +114,14 @@ int kr_bench_main(int argc, const char **argv) {
             else if (!strcmp(a, "--capture-fps")) captureFps = atoi(v), i++;
             else if (!strcmp(a, "--mic")) mic = YES;
         }
+        if ([mode isEqual:@"check"]) {
+            // What this app may record, and the devices it sees (no recording).
+            char *displays = kr_displays_json(), *mics = kr_mics_json();
+            printf("{\"screen\": %d, \"mic\": %d, \"displays\": %s, \"mics\": %s}\n", kr_screen_access(), kr_mic_access(), displays, mics);
+            kr_free(displays);
+            kr_free(mics);
+            return 0;
+        }
         BOOL sync = [mode isEqual:@"sync"];
         if (!out || !(sync || [mode isEqual:@"fresh"])) {
             fprintf(stderr, "usage: --bench fresh|sync --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic]\n");

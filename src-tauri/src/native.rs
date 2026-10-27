@@ -438,6 +438,19 @@ mod tests {
     }
 
     #[test]
+    fn lists_the_displays() {
+        // The JSON must parse (a 1 instead of true for "main" once emptied the list).
+        let displays = displays();
+        assert!(!displays.is_empty());
+        assert_eq!(
+            displays.iter().filter(|d| d.main).count(),
+            1,
+            "{displays:?}"
+        );
+        assert!(displays.iter().all(|d| d.width > 0 && d.height > 0));
+    }
+
+    #[test]
     fn records_synthetic_screen_and_mic() {
         let dir = temp_dir("basic");
         let rec = Recorder::start(&synthetic(dir.clone(), 640, 360, false)).unwrap();

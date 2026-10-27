@@ -905,7 +905,7 @@ char *kr_displays_json(void) {
             size_t h = mode ? CGDisplayModeGetPixelHeight(mode) : CGDisplayPixelsHigh(ids[i]);
             if (mode) CGDisplayModeRelease(mode);
             NSString *name = CGDisplayIsBuiltin(ids[i]) ? @"Built-in display" : [NSString stringWithFormat:@"Display %d", ++external];
-            [list addObject:@{@"id" : @(ids[i]), @"name" : name, @"width" : @(w), @"height" : @(h), @"main" : @(CGDisplayIsMain(ids[i]) != 0)}];
+            [list addObject:@{@"id" : @(ids[i]), @"name" : name, @"width" : @(w), @"height" : @(h), @"main" : CGDisplayIsMain(ids[i]) ? @YES : @NO}];
         }
         return jsonCopy(list);
     }
@@ -920,7 +920,7 @@ char *kr_mics_json(void) {
                                    position:AVCaptureDevicePositionUnspecified];
         NSMutableArray *list = [NSMutableArray array];
         for (AVCaptureDevice *d in s.devices)
-            [list addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"default" : @([d.uniqueID isEqual:def.uniqueID])}];
+            [list addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"default" : [d.uniqueID isEqual:def.uniqueID] ? @YES : @NO}];
         return jsonCopy(list);
     }
 }
