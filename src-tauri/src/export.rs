@@ -1162,11 +1162,17 @@ pub mod tests {
 
     /// Export speed on this computer: 10 min of a moving 1728×1080 screen with a 720p
     /// camera bubble and speech-like sound, as the dev Mac records them (VideoToolbox, the
-    /// recording's bitrates). Run under `/usr/bin/time -l` for the CPU of FFmpeg too:
-    /// `cargo test --lib measure_ten_minute_export -- --ignored --nocapture`
+    /// recording's bitrates). A measurement, not a check (CI runs the ignored tests, so it
+    /// only runs with `KREOKIT_MEASURE=1`). Run under `/usr/bin/time -l` for the CPU of
+    /// FFmpeg too:
+    /// `KREOKIT_MEASURE=1 cargo test --lib measure_ten_minute_export -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn measure_ten_minute_export() {
+        if std::env::var_os("KREOKIT_MEASURE").is_none() {
+            eprintln!("set KREOKIT_MEASURE=1 to measure");
+            return;
+        }
         let seconds = 600.0;
         let dir = crate::sessions::tests::temp_root("export-measure");
         let ffmpeg = ffmpeg::locate("ffmpeg").unwrap();
