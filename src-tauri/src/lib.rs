@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
-use native::{Access, Display, Mic};
+use native::{Access, Camera, Display, Mic};
 use sessions::{Live, Options, Recordings, Session};
 
 /// Runs blocking work (the recorder, FFmpeg, file I/O) off the main thread.
@@ -48,6 +48,7 @@ fn recordings(app: &AppHandle) -> tauri::State<'_, Recordings> {
 struct Permissions {
     screen: Access,
     mic: Access,
+    camera: Access,
     /// macOS 12 applies a new Screen Recording permission only after a restart.
     restart_after_screen: bool,
     /// Screen Recording was requested in an earlier run and still isn't allowed: either
@@ -102,6 +103,7 @@ fn permissions(app: AppHandle) -> Permissions {
         return Permissions {
             screen: access,
             mic: access,
+            camera: access,
             restart_after_screen: true,
             screen_asked_before: mode == "stuck",
         };
@@ -114,6 +116,7 @@ fn permissions(app: AppHandle) -> Permissions {
     Permissions {
         screen,
         mic: native::mic_access(),
+        camera: native::camera_access(),
         restart_after_screen: macos_major() == 12,
         screen_asked_before: asked && screen != Access::Allowed,
     }
@@ -126,6 +129,15 @@ async fn request_mic() -> Result<Access, String> {
         return Ok(Access::Allowed);
     }
     blocking(|| Ok(native::request_mic_access())).await
+}
+
+/// Shows the system's camera question (first time only); returns the answer.
+#[tauri::command]
+async fn request_camera() -> Result<Access, String> {
+    if synthetic().is_some() {
+        return Ok(Access::Allowed);
+    }
+    blocking(|| Ok(native::request_camera_access())).await
 }
 
 /// The system's screen-recording request (macOS shows it once, then opens nothing).
@@ -194,6 +206,7 @@ fn restart_app(app: AppHandle) {
 struct Devices {
     displays: Vec<Display>,
     mics: Vec<Mic>,
+    cameras: Vec<Camera>,
 }
 
 #[tauri::command]
@@ -212,12 +225,20 @@ async fn devices() -> Result<Devices, String> {
                 name: "Test microphone".into(),
                 default: true,
             }],
+            cameras: vec![Camera {
+                id: "synthetic".into(),
+                name: "Test camera".into(),
+                default: true,
+                width: 1280,
+                height: 720,
+            }],
         });
     }
     blocking(|| {
         Ok(Devices {
             displays: native::displays(),
             mics: native::mics(),
+            cameras: native::cameras(),
         })
     })
     .await
@@ -382,6 +403,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             permissions,
             request_mic,
+            request_camera,
             request_screen,
             reset_screen_permission,
             open_privacy_settings,

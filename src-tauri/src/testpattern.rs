@@ -252,7 +252,13 @@ pub fn report(frames: &[Frame], clicks: &[f64], g: &Geometry, fps: f64) -> Repor
 /// The whole check of a synthetic recording's folder (screen.mp4 + mic.mp4).
 #[cfg(test)]
 pub fn analyze_dir(dir: &Path, g: &Geometry, fps: f64) -> Result<Report, String> {
-    let frames = read_frames(&dir.join("screen.mp4"), g)?;
+    analyze_video(dir, "screen.mp4", g, fps)
+}
+
+/// The same for one picture track of the folder (screen.mp4 or camera.mp4), against mic.mp4.
+#[cfg(test)]
+pub fn analyze_video(dir: &Path, video: &str, g: &Geometry, fps: f64) -> Result<Report, String> {
+    let frames = read_frames(&dir.join(video), g)?;
     let mic = dir.join("mic.mp4");
     let clicks = if mic.is_file() {
         let (samples, start) = read_audio(&mic)?;

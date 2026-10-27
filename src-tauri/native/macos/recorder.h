@@ -1,9 +1,10 @@
 // KreoKit Rec's macOS recorder (recorder.m), called from Rust (src/native.rs).
 //
-// One recording = one folder with one fragmented MP4 per source (screen.mp4, mic.mp4), all
-// on the host clock (docs/capture-research.md). The screen is captured at capture_fps and
-// one frame is kept per output frame slot (1/fps): the newest frame captured before the
-// slot's middle, or the previous picture again when nothing on screen changed.
+// One recording = one folder with one fragmented MP4 per source (screen.mp4, camera.mp4,
+// mic.mp4), all on the host clock (docs/capture-research.md). The screen is captured at
+// capture_fps, the camera at its own fixed fps; for each, one frame is kept per output frame
+// slot (1/fps): the newest frame captured before the slot's middle, or the previous picture
+// again when nothing new arrived.
 
 #ifndef KR_RECORDER_H
 #define KR_RECORDER_H
@@ -16,7 +17,7 @@
 #define KR_SCREEN_SCREENCAPTUREKIT 2
 
 typedef struct {
-    const char *dir;     // existing folder for screen.mp4 and mic.mp4
+    const char *dir;     // existing folder for the files
     int screen;          // 1: record a display
     uint32_t display_id; // CGDirectDisplayID; 0: the main display
     int width, height;   // output size in pixels (even)
@@ -26,8 +27,12 @@ typedef struct {
     int video_bitrate;   // bits per second
     int mic;             // 1: record a microphone
     const char *mic_id;  // AVCaptureDevice uniqueID; NULL or "": the default microphone
-    // Tests: generated sources instead of real devices (a frame counter on the screen,
-    // a click every second on the mic, see recorder.m). synthetic_fast runs them as fast as
+    int camera;                       // 1: record a camera
+    const char *camera_id;            // AVCaptureDevice uniqueID; NULL or "": the default camera
+    int camera_width, camera_height;  // output size (even; the camera's own shape, kr_cameras_json)
+    int camera_bitrate;               // bits per second
+    // Tests: generated sources instead of real devices (a frame counter on the screen and
+    // the camera, a click every second on the mic, see recorder.m). synthetic_fast runs them as fast as
     // the encoder allows on their own clock (a simulated hour in minutes);
     // synthetic_static freezes the picture for 2 s of every 10 s (nothing changes on screen).
     int synthetic;
@@ -42,6 +47,9 @@ typedef struct {
     int64_t frames_repeated; // ... repeating the previous picture (nothing new was captured)
     int64_t frames_late;     // captured pictures that arrived after their slot was written
     int64_t frames_dropped;  // output frames the encoder couldn't take in time
+    // The same for camera.mp4, plus pictures the system dropped before they reached us.
+    int64_t camera_frames, camera_frames_new, camera_frames_repeated, camera_frames_late;
+    int64_t camera_frames_dropped, camera_frames_lost;
     int64_t audio_samples;   // samples written to mic.mp4 (48 kHz)
     int64_t audio_filled;    // samples of silence written where the microphone sent nothing
     int64_t audio_dropped;   // samples dropped (overlapping or the encoder couldn't keep up)
@@ -68,11 +76,17 @@ void kr_request_screen_access(void);
 int kr_mic_access(void);
 // Shows the system dialog if not asked yet; returns the answer (blocks until then).
 int kr_request_mic_access(void);
+// The same for the camera.
+int kr_camera_access(void);
+int kr_request_camera_access(void);
 
 // Devices, as JSON arrays; free with kr_free.
-// Displays: [{"id", "name", "width", "height" (pixels), "main"}]; mics: [{"id", "name", "default"}].
+// Displays: [{"id", "name", "width", "height" (pixels), "main"}]; mics: [{"id", "name", "default"}];
+// cameras: [{"id", "name", "default", "width", "height"}], the size being the largest the
+// camera delivers at 30 fps up to 720 pixels high.
 char *kr_displays_json(void);
 char *kr_mics_json(void);
+char *kr_cameras_json(void);
 void kr_free(char *s);
 
 // The level meter on the setup screen: opens the microphone without recording.

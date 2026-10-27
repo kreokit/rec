@@ -306,6 +306,7 @@ impl Recordings {
                 bitrate: video_bitrate(width, height),
             }),
             mic: options.mic_id.clone(),
+            camera: None,
             synthetic,
         };
         let capture = match self.backend.start(&config) {

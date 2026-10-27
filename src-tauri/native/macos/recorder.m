@@ -190,6 +190,30 @@ static void setError(char *error, size_t len, NSString *message) {
 }
 @end
 
+// One picture track (screen or camera): frames arrive at their own pace, one is kept per
+// output slot.
+@interface KRPacer : NSObject {
+  @public
+    KRWriter *w;
+    BOOL camera;
+    int64_t slot;
+    NSMutableArray<KRFrame *> *frames; // captured, waiting for their slot, by time
+    KRFrame *current;                  // the picture of the last written slot
+    double lastBoundary;
+    int64_t written, fresh, repeated, late, lost;
+}
+@end
+@implementation KRPacer
++ (instancetype)pacerWith:(KRWriter *)w camera:(BOOL)camera {
+    KRPacer *p = [KRPacer new];
+    p->w = w;
+    p->camera = camera;
+    p->frames = [NSMutableArray array];
+    p->lastBoundary = -INFINITY;
+    return p;
+}
+@end
+
 static NSDictionary *h264Settings(int w, int h, int fps, int bitrate) {
     return @{
         AVVideoCodecKey : AVVideoCodecTypeH264,
@@ -245,6 +269,31 @@ static AVCaptureDevice *micDevice(const char *mic_id) {
     return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeAudio];
 }
 
+static AVCaptureDevice *cameraDevice(const char *camera_id) {
+    if (camera_id && *camera_id) {
+        AVCaptureDevice *d = [AVCaptureDevice deviceWithUniqueID:@(camera_id)];
+        if (d) return d;
+    }
+    return [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+}
+
+// The camera format the recorder uses: the largest up to 720 pixels high that runs at
+// 30 fps (kr_cameras_json reports its size).
+static AVCaptureDeviceFormat *cameraFormat(AVCaptureDevice *dev) {
+    AVCaptureDeviceFormat *best = nil;
+    int64_t bestArea = 0;
+    for (AVCaptureDeviceFormat *f in dev.formats) {
+        CMVideoDimensions d = CMVideoFormatDescriptionGetDimensions(f.formatDescription);
+        if (d.height > 720) continue;
+        BOOL runs30 = NO;
+        for (AVFrameRateRange *r in f.videoSupportedFrameRateRanges)
+            if (r.minFrameRate <= 30.01 && r.maxFrameRate >= 29.99) runs30 = YES;
+        int64_t area = (int64_t)d.width * d.height;
+        if (runs30 && area > bestArea) best = f, bestArea = area;
+    }
+    return best;
+}
+
 static NSDictionary *floatMonoSettings(void) {
     return @{
         AVFormatIDKey : @(kAudioFormatLinearPCM), AVSampleRateKey : @(kRate), AVNumberOfChannelsKey : @1,
@@ -254,20 +303,16 @@ static NSDictionary *floatMonoSettings(void) {
 
 // ---------------------------------------------------------------------------------------
 
-@interface KRRecorder : NSObject <AVCaptureAudioDataOutputSampleBufferDelegate> {
+@interface KRRecorder : NSObject <AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureVideoDataOutputSampleBufferDelegate> {
   @public
     KrRecConfig cfg;
-    NSString *dir, *micId;
+    NSString *dir, *micId, *cameraId;
     dispatch_queue_t q;
     double t0;
     double pausedTotal, pauseStart; // pauseStart < 0: not paused
     NSMutableArray<NSArray<NSNumber *> *> *pauses; // [P, R] host times, for the audio
     double stopAt;
-    // Frame pacer.
-    int64_t slot;
-    NSMutableArray<KRFrame *> *frames; // captured, waiting for their slot, by time
-    KRFrame *current;                  // the picture of the last written slot
-    double lastBoundary;
+    KRPacer *screenP, *cameraP;
     // Audio.
     int64_t audioNext; // next output sample
     float peakNow, peakPrev;
@@ -275,21 +320,21 @@ static NSDictionary *floatMonoSettings(void) {
     CMAudioFormatDescriptionRef pcmFormat;
     KrRecStatus st;
     NSString *error;
-    KRWriter *screenW, *micW;
+    KRWriter *screenW, *cameraW, *micW;
     // Sources.
     CGDisplayStreamRef cgd;
     id scStream, scOutput;
-    AVCaptureSession *micSession;
+    AVCaptureSession *micSession, *cameraSession;
     dispatch_source_t timer, syncTimer;
     // Synthetic sources.
     _Atomic double synthNow;
     dispatch_semaphore_t synthDone;
-    CVPixelBufferPoolRef synthPool;
+    CVPixelBufferPoolRef synthPool, synthCameraPool;
 }
 @end
 
 @interface KRRecorder (Pacer)
-- (void)ingest:(CVPixelBufferRef)pb at:(double)t;
+- (void)ingest:(CVPixelBufferRef)pb at:(double)t into:(KRPacer *)p;
 - (void)audio:(const float *)s count:(int64_t)n at:(double)h;
 @end
 
@@ -309,7 +354,8 @@ API_AVAILABLE(macos(12.3))
     NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(attachments, 0);
     CVPixelBufferRef pb = CMSampleBufferGetImageBuffer(sb);
     if ([info[SCStreamFrameInfoStatus] integerValue] != SCFrameStatusComplete || !pb) return;
-    [self.rec ingest:pb at:CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb))];
+    KRRecorder *rec = self.rec;
+    [rec ingest:pb at:CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb)) into:rec->screenP];
 }
 
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
@@ -334,64 +380,73 @@ API_AVAILABLE(macos(12.3))
 
 #pragma mark Frame pacer
 
-// The host time of output slot `slot`, and its boundary: the slot takes the newest frame
-// captured before slot time + half a frame.
-- (double)slotTime {
-    return t0 + (double)slot / cfg.fps + pausedTotal;
+// The host time of a track's next output slot, and its boundary: the slot takes the newest
+// frame captured before slot time + half a frame.
+- (double)slotTime:(KRPacer *)p {
+    return t0 + (double)p->slot / cfg.fps + pausedTotal;
 }
 
-- (double)nextBoundary {
-    double hk = [self slotTime];
+- (double)nextBoundary:(KRPacer *)p {
+    double hk = [self slotTime:p];
     if (pauseStart >= 0 && hk >= pauseStart) return INFINITY;
     return hk + 0.5 / cfg.fps;
 }
 
-- (void)ingest:(CVPixelBufferRef)pb at:(double)t {
-    if (t < lastBoundary - kTie) {
-        st.frames_late++;
-        if (current && t <= current->t) return;
+- (void)ingest:(CVPixelBufferRef)pb at:(double)t into:(KRPacer *)p {
+    if (!p) return;
+    if (t < p->lastBoundary - kTie) {
+        p->late++;
+        if (p->current && t <= p->current->t) return;
     }
     KRFrame *f = [KRFrame new];
     f->pb = CVPixelBufferRetain(pb);
     f->t = t;
+    NSMutableArray<KRFrame *> *frames = p->frames;
     NSUInteger i = frames.count;
     while (i > 0 && frames[i - 1]->t > t) i--;
     [frames insertObject:f atIndex:i];
     // Only the newest frame before the next slot's boundary can still be used.
-    double nb = [self nextBoundary];
+    double nb = [self nextBoundary:p];
     while (frames.count >= 2 && frames[1]->t < nb - kTie) [frames removeObjectAtIndex:0];
 }
 
-// Writes every slot whose boundary is before `limit` (and before a pause or the stop).
+// Writes every slot of every picture track whose boundary is before `limit` (and before a
+// pause or the stop).
 - (void)emitUpTo:(double)limit {
-    if (!screenW) return;
+    if (screenP) [self emit:screenP upTo:limit];
+    if (cameraP) [self emit:cameraP upTo:limit];
+}
+
+- (void)emit:(KRPacer *)p upTo:(double)limit {
     while (!st.failed) {
-        double hk = [self slotTime];
+        double hk = [self slotTime:p];
         if (pauseStart >= 0 && hk >= pauseStart) break;
         if (hk >= stopAt) break;
         double boundary = hk + 0.5 / cfg.fps;
         if (boundary > limit) break;
         KRFrame *pick = nil;
-        while (frames.count && frames[0]->t < boundary - kTie) {
-            pick = frames[0];
-            [frames removeObjectAtIndex:0];
+        while (p->frames.count && p->frames[0]->t < boundary - kTie) {
+            pick = p->frames[0];
+            [p->frames removeObjectAtIndex:0];
         }
         if (pick) {
-            current = pick;
-            st.frames_new++;
-        } else if (current) {
-            st.frames_repeated++;
+            p->current = pick;
+            p->fresh++;
+        } else if (p->current) {
+            p->repeated++;
         } else {
-            if (hk - t0 > 3) [self fail:@"No picture arrived from the screen. Check that KreoKit Rec may record the screen, then try again."];
+            if (hk - t0 > 3)
+                [self fail:p->camera ? @"No picture arrived from the camera. Check that KreoKit Rec may use the camera and that no other app is using it, then try again."
+                                     : @"No picture arrived from the screen. Check that KreoKit Rec may record the screen, then try again."];
             break; // waits for the first picture
         }
         KRItem *item = [KRItem new];
-        item->pb = CVPixelBufferRetain(current->pb);
-        item->index = slot;
-        [screenW enqueue:item]; // a full queue drops it (the writer counts it)
-        st.frames++;
-        slot++;
-        lastBoundary = boundary;
+        item->pb = CVPixelBufferRetain(p->current->pb);
+        item->index = p->slot;
+        [p->w enqueue:item]; // a full queue drops it (the writer counts it)
+        p->written++;
+        p->slot++;
+        p->lastBoundary = boundary;
     }
 }
 
@@ -477,13 +532,24 @@ API_AVAILABLE(macos(12.3))
 }
 
 - (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sb fromConnection:(AVCaptureConnection *)connection {
+    if ([output isKindOfClass:AVCaptureVideoDataOutput.class]) {
+        CVPixelBufferRef pb = CMSampleBufferGetImageBuffer(sb);
+        if (pb) [self ingest:pb at:hostTimeOf(sb, cameraSession) into:cameraP];
+        return;
+    }
     double h = hostTimeOf(sb, micSession);
     withSamples(sb, ^(const float *s, int64_t n) { [self audio:s count:n at:h]; });
 }
 
+// The camera's own queue was full (we were too slow to take a picture).
+- (void)captureOutput:(AVCaptureOutput *)output didDropSampleBuffer:(CMSampleBufferRef)sb fromConnection:(AVCaptureConnection *)connection {
+    if ([output isKindOfClass:AVCaptureVideoDataOutput.class] && cameraP) cameraP->lost++;
+}
+
 #pragma mark Synthetic sources
 
-// The test pattern (also drawn by the bench window, src/testpattern.rs reads it back): a
+// The test pattern (also drawn by the bench window and on the synthetic camera;
+// src/testpattern.rs reads it back): a
 // 32-bit frame counter as black/white squares in the top row (34 cells across the
 // picture), and a white strip below it for one output frame from every whole second, when
 // the mic clicks (one output frame long, so a slot always catches it).
@@ -505,8 +571,9 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
     CVPixelBufferUnlockBaseAddress(pb, 0);
 }
 
-// Runs the generated screen (capture_fps) and microphone (a 5 ms click every whole second
-// from the start) until the stop. The counter is the capture frame number since the start.
+// Runs the generated screen (capture_fps), camera (fps, its counter = its frame number) and
+// microphone (a 5 ms click every whole second from the start) until the stop. The screen's
+// counter is the capture frame number since the start.
 - (void)runSynthetic {
     int cfps = cfg.capture_fps;
     double base = t0 - 0.5;
@@ -517,7 +584,9 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
         if (cfg.synthetic_fast) {
             atomic_store(&synthNow, t);
             // The encoder sets the pace: wait while half a second is queued.
-            while (((screenW && atomic_load(&screenW->queued) > screenW->limit / 2) || (micW && atomic_load(&micW->queued) > micW->limit / 2))) usleep(500);
+            while ((screenW && atomic_load(&screenW->queued) > screenW->limit / 2) || (cameraW && atomic_load(&cameraW->queued) > cameraW->limit / 2) ||
+                   (micW && atomic_load(&micW->queued) > micW->limit / 2))
+                usleep(500);
         } else {
             double wait = t - hostSeconds();
             if (wait > 0) usleep((useconds_t)(wait * 1e6));
@@ -542,7 +611,17 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
                 CVPixelBufferPoolCreatePixelBuffer(NULL, self->synthPool, &pb);
                 if (pb) {
                     drawPattern(pb, n < 0 ? 0 : n, n >= 0 && n % cfps < cfps / self->cfg.fps);
-                    [self ingest:pb at:t];
+                    [self ingest:pb at:t into:self->screenP];
+                    CVPixelBufferRelease(pb);
+                }
+            }
+            if (self->cameraW && i % (cfps / self->cfg.fps) == 0) {
+                int64_t c = llround((t - self->t0) * self->cfg.fps);
+                CVPixelBufferRef pb = NULL;
+                CVPixelBufferPoolCreatePixelBuffer(NULL, self->synthCameraPool, &pb);
+                if (pb) {
+                    drawPattern(pb, c < 0 ? 0 : c, c >= 0 && c % self->cfg.fps == 0);
+                    [self ingest:pb at:t into:self->cameraP];
                     CVPixelBufferRelease(pb);
                 }
             }
@@ -582,7 +661,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
                 CVPixelBufferCreateWithIOSurface(NULL, surface, NULL, &pb);
                 if (!pb) return;
                 // displayTime is mach_absolute_time: the host clock.
-                [rec ingest:pb at:CMTimeGetSeconds(CMClockMakeHostTimeFromSystemUnits(displayTime))];
+                [rec ingest:pb at:CMTimeGetSeconds(CMClockMakeHostTimeFromSystemUnits(displayTime)) into:rec->screenP];
                 CVPixelBufferRelease(pb);
             });
         if (!cgd || CGDisplayStreamStart(cgd) != kCGErrorSuccess) {
@@ -668,6 +747,52 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
     return YES;
 }
 
+- (BOOL)startCamera:(NSString **)message {
+    AVCaptureDevice *dev = cameraDevice(cameraId.UTF8String);
+    NSError *e = nil;
+    AVCaptureDeviceInput *input = dev ? [AVCaptureDeviceInput deviceInputWithDevice:dev error:&e] : nil;
+    if (!input) {
+        *message = dev ? [NSString stringWithFormat:@"The camera can't be opened (%@). Check that KreoKit Rec may use it in System Preferences > Security & Privacy > Privacy > Camera, and that no other app is using it.", e.localizedDescription]
+                       : @"No camera found. Connect one, or record without the camera.";
+        return NO;
+    }
+    cameraSession = [AVCaptureSession new];
+    [cameraSession beginConfiguration];
+    [cameraSession addInput:input];
+    AVCaptureVideoDataOutput *out = [AVCaptureVideoDataOutput new];
+    // NV12 at the output size: the camera's scaler does the work, not our process.
+    out.videoSettings = @{
+        (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        (id)kCVPixelBufferWidthKey : @(cfg.camera_width),
+        (id)kCVPixelBufferHeightKey : @(cfg.camera_height),
+    };
+    [out setSampleBufferDelegate:self queue:q];
+    [cameraSession addOutput:out];
+    [cameraSession commitConfiguration];
+    // A fixed frame rate (min = max frame duration): otherwise the camera halves it in low
+    // light. The lock is held through startRunning so the session keeps the setting.
+    BOOL locked = [dev lockForConfiguration:nil];
+    if (locked) {
+        AVCaptureDeviceFormat *format = cameraFormat(dev);
+        if (format) dev.activeFormat = format;
+        CMTime frame = CMTimeMake(1, cfg.fps);
+        for (AVFrameRateRange *r in dev.activeFormat.videoSupportedFrameRateRanges) {
+            if (r.minFrameRate <= cfg.fps + 0.01 && r.maxFrameRate >= cfg.fps - 0.01) {
+                dev.activeVideoMinFrameDuration = frame;
+                dev.activeVideoMaxFrameDuration = frame;
+                break;
+            }
+        }
+    }
+    [cameraSession startRunning];
+    if (locked) [dev unlockForConfiguration];
+    if (!cameraSession.running) {
+        *message = @"The camera didn't start. Check that KreoKit Rec may use it in System Preferences > Security & Privacy > Privacy > Camera, and that no other app is using it.";
+        return NO;
+    }
+    return YES;
+}
+
 - (void)stopSources {
     if (timer) dispatch_source_cancel(timer), timer = nil;
     if (syncTimer) dispatch_source_cancel(syncTimer), syncTimer = nil;
@@ -689,6 +814,8 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
     }
     [micSession stopRunning];
     micSession = nil;
+    [cameraSession stopRunning];
+    cameraSession = nil;
     // The generator runs on to 0.3 s after the stop by itself, so the last slots get their
     // frames as with a real screen.
     if (synthDone) {
@@ -700,6 +827,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
 - (void)dealloc {
     if (pcmFormat) CFRelease(pcmFormat);
     if (synthPool) CVPixelBufferPoolRelease(synthPool);
+    if (synthCameraPool) CVPixelBufferPoolRelease(synthCameraPool);
 }
 
 @end
@@ -712,15 +840,15 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
         rec->cfg = *config;
         rec->dir = @(config->dir);
         rec->micId = config->mic_id ? @(config->mic_id) : @"";
+        rec->cameraId = config->camera_id ? @(config->camera_id) : @"";
         rec->cfg.dir = NULL;
         rec->cfg.mic_id = NULL;
+        rec->cfg.camera_id = NULL;
         if (rec->cfg.capture_fps < rec->cfg.fps) rec->cfg.capture_fps = rec->cfg.fps;
         rec->q = dispatch_queue_create("kreokit.rec.capture", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         rec->pauses = [NSMutableArray array];
-        rec->frames = [NSMutableArray array];
         rec->pauseStart = -1;
         rec->stopAt = INFINITY;
-        rec->lastBoundary = -INFINITY;
         AudioStreamBasicDescription asbd = {kRate, kAudioFormatLinearPCM, kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked, 4, 1, 4, 1, 32, 0};
         CMAudioFormatDescriptionCreate(NULL, &asbd, 0, NULL, 0, NULL, NULL, &rec->pcmFormat);
 
@@ -734,6 +862,17 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
                 setError(error, error_len, [NSString stringWithFormat:@"The screen recording file can't be created (%@). Check that the disk has space.", message]);
                 return NULL;
             }
+            rec->screenP = [KRPacer pacerWith:rec->screenW camera:NO];
+        }
+        if (config->camera) {
+            rec->cameraW = [KRWriter writerAt:[rec->dir stringByAppendingPathComponent:@"camera.mp4"] video:YES
+                                     settings:h264Settings(config->camera_width, config->camera_height, config->fps, config->camera_bitrate)
+                                          fps:config->fps realtime:realtime error:&message];
+            if (!rec->cameraW) {
+                setError(error, error_len, [NSString stringWithFormat:@"The camera recording file can't be created (%@). Check that the disk has space.", message]);
+                return NULL;
+            }
+            rec->cameraP = [KRPacer pacerWith:rec->cameraW camera:YES];
         }
         if (config->mic) {
             rec->micW = [KRWriter writerAt:[rec->dir stringByAppendingPathComponent:@"mic.mp4"] video:NO settings:aacSettings() fps:config->fps realtime:realtime error:&message];
@@ -756,6 +895,15 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
                 };
                 CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &rec->synthPool);
             }
+            if (config->camera) {
+                NSDictionary *attrs = @{
+                    (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+                    (id)kCVPixelBufferWidthKey : @(config->camera_width),
+                    (id)kCVPixelBufferHeightKey : @(config->camera_height),
+                    (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+                };
+                CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &rec->synthCameraPool);
+            }
             rec->synthDone = dispatch_semaphore_create(0);
             NSThread *thread = [[NSThread alloc] initWithBlock:^{ [rec runSynthetic]; }];
             thread.qualityOfService = NSQualityOfServiceUserInteractive;
@@ -766,13 +914,18 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
                 setError(error, error_len, message);
                 return NULL;
             }
+            if (config->camera && ![rec startCamera:&message]) {
+                [rec stopSources];
+                setError(error, error_len, message);
+                return NULL;
+            }
             if (config->screen && ![rec startScreen:&message]) {
                 [rec stopSources];
                 setError(error, error_len, message);
                 return NULL;
             }
         }
-        if (!config->synthetic_fast && config->screen) {
+        if (!config->synthetic_fast && (config->screen || config->camera)) {
             // The pacer writes each slot once its frame had time to arrive.
             rec->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, rec->q);
             uint64_t interval = (uint64_t)(NSEC_PER_SEC / (2 * config->fps));
@@ -787,9 +940,10 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
         // What the OS still holds in memory reaches the disk every 2 s (power loss).
         rec->syncTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         dispatch_source_set_timer(rec->syncTimer, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 2 * NSEC_PER_SEC, NSEC_PER_SEC / 4);
-        KRWriter *sw = rec->screenW, *mw = rec->micW;
+        KRWriter *sw = rec->screenW, *cw = rec->cameraW, *mw = rec->micW;
         dispatch_source_set_event_handler(rec->syncTimer, ^{
             [sw sync];
+            [cw sync];
             [mw sync];
         });
         dispatch_resume(rec->syncTimer);
@@ -822,9 +976,20 @@ static void fillStatus(KRRecorder *rec, KrRecStatus *status) {
     status->elapsed = MAX(0.0, end - rec->t0 - rec->pausedTotal);
     status->paused = rec->pauseStart >= 0;
     status->mic_peak = MAX(rec->peakNow, rec->peakPrev);
+    KRPacer *s = rec->screenP, *c = rec->cameraP;
+    status->frames = s ? s->written : 0;
+    status->frames_new = s ? s->fresh : 0;
+    status->frames_repeated = s ? s->repeated : 0;
+    status->frames_late = s ? s->late : 0;
     status->frames_dropped = rec->screenW ? atomic_load(&rec->screenW->dropped) : 0;
+    status->camera_frames = c ? c->written : 0;
+    status->camera_frames_new = c ? c->fresh : 0;
+    status->camera_frames_repeated = c ? c->repeated : 0;
+    status->camera_frames_late = c ? c->late : 0;
+    status->camera_frames_lost = c ? c->lost : 0;
+    status->camera_frames_dropped = rec->cameraW ? atomic_load(&rec->cameraW->dropped) : 0;
     status->audio_dropped = rec->st.audio_dropped + (rec->micW ? atomic_load(&rec->micW->dropped) : 0);
-    if ((rec->screenW && rec->screenW.failure) || (rec->micW && rec->micW.failure)) status->failed = 1;
+    if (rec->screenW.failure || rec->cameraW.failure || rec->micW.failure) status->failed = 1;
 }
 
 void kr_rec_status(void *p, KrRecStatus *status) {
@@ -845,12 +1010,13 @@ int kr_rec_stop(void *p, KrRecStatus *status, char *error, size_t error_len) {
         dispatch_sync(rec->q, ^{ [rec emitUpTo:INFINITY]; });
         dispatch_group_t done = dispatch_group_create();
         [rec->screenW finish:done];
+        [rec->cameraW finish:done];
         [rec->micW finish:done];
         dispatch_group_wait(done, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
         __block int result = 0;
         dispatch_sync(rec->q, ^{
             fillStatus(rec, status);
-            NSString *failure = rec->error ?: rec->screenW.failure ?: rec->micW.failure;
+            NSString *failure = rec->error ?: rec->screenW.failure ?: rec->cameraW.failure ?: rec->micW.failure;
             if (failure) {
                 setError(error, error_len, failure);
                 result = -1;
@@ -882,6 +1048,24 @@ int kr_request_mic_access(void) {
         dispatch_semaphore_wait(answered, DISPATCH_TIME_FOREVER);
     }
     return kr_mic_access();
+}
+
+int kr_camera_access(void) {
+    switch ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]) {
+    case AVAuthorizationStatusAuthorized: return 3;
+    case AVAuthorizationStatusRestricted: return 2;
+    case AVAuthorizationStatusDenied: return 1;
+    default: return 0;
+    }
+}
+
+int kr_request_camera_access(void) {
+    if ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo] == AVAuthorizationStatusNotDetermined) {
+        dispatch_semaphore_t answered = dispatch_semaphore_create(0);
+        [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted) { dispatch_semaphore_signal(answered); }];
+        dispatch_semaphore_wait(answered, DISPATCH_TIME_FOREVER);
+    }
+    return kr_camera_access();
 }
 
 static char *jsonCopy(id object) {
@@ -921,6 +1105,27 @@ char *kr_mics_json(void) {
         NSMutableArray *list = [NSMutableArray array];
         for (AVCaptureDevice *d in s.devices)
             [list addObject:@{@"id" : d.uniqueID, @"name" : d.localizedName, @"default" : [d.uniqueID isEqual:def.uniqueID] ? @YES : @NO}];
+        return jsonCopy(list);
+    }
+}
+
+char *kr_cameras_json(void) {
+    @autoreleasepool {
+        AVCaptureDevice *def = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+        AVCaptureDeviceDiscoverySession *s = [AVCaptureDeviceDiscoverySession
+            discoverySessionWithDeviceTypes:@[ AVCaptureDeviceTypeBuiltInWideAngleCamera, AVCaptureDeviceTypeExternalUnknown ]
+                                  mediaType:AVMediaTypeVideo
+                                   position:AVCaptureDevicePositionUnspecified];
+        NSMutableArray *list = [NSMutableArray array];
+        for (AVCaptureDevice *d in s.devices) {
+            AVCaptureDeviceFormat *f = cameraFormat(d);
+            if (!f) continue; // no 30 fps format: not usable for recording
+            CMVideoDimensions dim = CMVideoFormatDescriptionGetDimensions(f.formatDescription);
+            [list addObject:@{
+                @"id" : d.uniqueID, @"name" : d.localizedName, @"default" : [d.uniqueID isEqual:def.uniqueID] ? @YES : @NO,
+                @"width" : @(dim.width), @"height" : @(dim.height)
+            }];
+        }
         return jsonCopy(list);
     }
 }

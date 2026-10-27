@@ -232,6 +232,7 @@ mod tests {
                 bitrate: 2_000_000,
             }),
             mic: None,
+            camera: None,
             synthetic: Some(Synthetic {
                 fast: true,
                 still_periods: true,

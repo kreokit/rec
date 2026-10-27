@@ -29,6 +29,16 @@ pub struct ScreenConfig {
     pub bitrate: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CameraConfig {
+    /// `""`: the default camera.
+    pub id: String,
+    /// The output size: the camera's own shape ([`Camera`]).
+    pub width: u32,
+    pub height: u32,
+    pub bitrate: u32,
+}
+
 /// Generated sources instead of real devices, for tests (see recorder.h).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Synthetic {
@@ -44,10 +54,12 @@ pub struct RecordConfig {
     pub screen: Option<ScreenConfig>,
     /// The microphone's id (`None`: no microphone; `Some("")`: the default one).
     pub mic: Option<String>,
+    pub camera: Option<CameraConfig>,
     pub synthetic: Option<Synthetic>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Status {
     pub elapsed: f64,
     pub frames: i64,
@@ -55,6 +67,13 @@ pub struct Status {
     pub frames_repeated: i64,
     pub frames_late: i64,
     pub frames_dropped: i64,
+    pub camera_frames: i64,
+    pub camera_frames_new: i64,
+    pub camera_frames_repeated: i64,
+    pub camera_frames_late: i64,
+    pub camera_frames_dropped: i64,
+    /// Pictures the system dropped before they reached the recorder.
+    pub camera_frames_lost: i64,
     pub audio_samples: i64,
     pub audio_filled: i64,
     pub audio_dropped: i64,
@@ -77,6 +96,16 @@ pub struct Mic {
     pub id: String,
     pub name: String,
     pub default: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Camera {
+    pub id: String,
+    pub name: String,
+    pub default: bool,
+    /// The largest size it delivers at 30 fps, up to 720 pixels high.
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,6 +139,11 @@ mod macos {
         video_bitrate: c_int,
         mic: c_int,
         mic_id: *const c_char,
+        camera: c_int,
+        camera_id: *const c_char,
+        camera_width: c_int,
+        camera_height: c_int,
+        camera_bitrate: c_int,
         synthetic: c_int,
         synthetic_fast: c_int,
         synthetic_static: c_int,
@@ -124,6 +158,12 @@ mod macos {
         frames_repeated: i64,
         frames_late: i64,
         frames_dropped: i64,
+        camera_frames: i64,
+        camera_frames_new: i64,
+        camera_frames_repeated: i64,
+        camera_frames_late: i64,
+        camera_frames_dropped: i64,
+        camera_frames_lost: i64,
         audio_samples: i64,
         audio_filled: i64,
         audio_dropped: i64,
@@ -147,8 +187,11 @@ mod macos {
         fn kr_request_screen_access();
         fn kr_mic_access() -> c_int;
         fn kr_request_mic_access() -> c_int;
+        fn kr_camera_access() -> c_int;
+        fn kr_request_camera_access() -> c_int;
         fn kr_displays_json() -> *mut c_char;
         fn kr_mics_json() -> *mut c_char;
+        fn kr_cameras_json() -> *mut c_char;
         fn kr_free(s: *mut c_char);
         fn kr_mic_monitor_start(mic_id: *const c_char, error: *mut c_char, len: usize) -> c_int;
         fn kr_mic_monitor_peak() -> f32;
@@ -164,6 +207,12 @@ mod macos {
                 frames_repeated: s.frames_repeated,
                 frames_late: s.frames_late,
                 frames_dropped: s.frames_dropped,
+                camera_frames: s.camera_frames,
+                camera_frames_new: s.camera_frames_new,
+                camera_frames_repeated: s.camera_frames_repeated,
+                camera_frames_late: s.camera_frames_late,
+                camera_frames_dropped: s.camera_frames_dropped,
+                camera_frames_lost: s.camera_frames_lost,
                 audio_samples: s.audio_samples,
                 audio_filled: s.audio_filled,
                 audio_dropped: s.audio_dropped,
@@ -192,6 +241,9 @@ mod macos {
             let dir = CString::new(config.dir.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
             let mic_id =
                 CString::new(config.mic.clone().unwrap_or_default()).map_err(|e| e.to_string())?;
+            let camera = config.camera.as_ref();
+            let camera_id = CString::new(camera.map(|c| c.id.clone()).unwrap_or_default())
+                .map_err(|e| e.to_string())?;
             let screen = config.screen.as_ref();
             let synthetic = config.synthetic.unwrap_or_default();
             let raw = KrRecConfig {
@@ -210,6 +262,11 @@ mod macos {
                 video_bitrate: screen.map_or(0, |s| s.bitrate as c_int),
                 mic: config.mic.is_some() as c_int,
                 mic_id: mic_id.as_ptr(),
+                camera: camera.is_some() as c_int,
+                camera_id: camera_id.as_ptr(),
+                camera_width: camera.map_or(0, |c| c.width as c_int),
+                camera_height: camera.map_or(0, |c| c.height as c_int),
+                camera_bitrate: camera.map_or(0, |c| c.bitrate as c_int),
                 synthetic: config.synthetic.is_some() as c_int,
                 synthetic_fast: synthetic.fast as c_int,
                 synthetic_static: synthetic.still_periods as c_int,
@@ -273,7 +330,7 @@ mod macos {
         unsafe { kr_request_screen_access() }
     }
 
-    fn mic_access_from(code: c_int) -> Access {
+    fn access_from(code: c_int) -> Access {
         match code {
             3 => Access::Allowed,
             0 => Access::NotAsked,
@@ -282,12 +339,21 @@ mod macos {
     }
 
     pub fn mic_access() -> Access {
-        mic_access_from(unsafe { kr_mic_access() })
+        access_from(unsafe { kr_mic_access() })
     }
 
     /// Shows the system dialog if the user wasn't asked yet; blocks until the answer.
     pub fn request_mic_access() -> Access {
-        mic_access_from(unsafe { kr_request_mic_access() })
+        access_from(unsafe { kr_request_mic_access() })
+    }
+
+    pub fn camera_access() -> Access {
+        access_from(unsafe { kr_camera_access() })
+    }
+
+    /// Shows the system dialog if the user wasn't asked yet; blocks until the answer.
+    pub fn request_camera_access() -> Access {
+        access_from(unsafe { kr_request_camera_access() })
     }
 
     fn take_json(s: *mut c_char) -> String {
@@ -305,6 +371,10 @@ mod macos {
 
     pub fn mics() -> Vec<Mic> {
         serde_json::from_str(&take_json(unsafe { kr_mics_json() })).unwrap_or_default()
+    }
+
+    pub fn cameras() -> Vec<Camera> {
+        serde_json::from_str(&take_json(unsafe { kr_cameras_json() })).unwrap_or_default()
     }
 
     /// Opens the microphone for the level meter (no recording).
@@ -362,10 +432,19 @@ mod other {
     pub fn request_mic_access() -> Access {
         Access::Allowed
     }
+    pub fn camera_access() -> Access {
+        Access::Allowed
+    }
+    pub fn request_camera_access() -> Access {
+        Access::Allowed
+    }
     pub fn displays() -> Vec<Display> {
         Vec::new()
     }
     pub fn mics() -> Vec<Mic> {
+        Vec::new()
+    }
+    pub fn cameras() -> Vec<Camera> {
         Vec::new()
     }
     pub fn monitor_start(_mic_id: &str) -> Result<(), String> {
@@ -403,11 +482,42 @@ mod tests {
                 bitrate: 2_000_000,
             }),
             mic: Some(String::new()),
+            camera: Some(CameraConfig {
+                id: String::new(),
+                width: CAMERA_W,
+                height: CAMERA_H,
+                bitrate: 1_000_000,
+            }),
             synthetic: Some(Synthetic {
                 fast: true,
                 still_periods: still,
             }),
         }
+    }
+
+    /// The synthetic camera's size in the tests.
+    pub const CAMERA_W: u32 = 320;
+    pub const CAMERA_H: u32 = 180;
+
+    /// The camera track: its own counter steps by one per output frame (30 fps), no gaps,
+    /// and its markers line up with the mic's clicks within one frame.
+    fn check_camera(dir: &std::path::Path, status: &Status) -> Report {
+        let report = analyze_video(
+            dir,
+            "camera.mp4",
+            &Geometry::synthetic(CAMERA_W, 30, false),
+            30.0,
+        )
+        .unwrap();
+        assert_eq!((report.bad, report.irregular_pts), (0, 0), "{report:?}");
+        assert_eq!(report.frames as i64, status.camera_frames, "{report:?}");
+        let worst = report
+            .sync_ms_min
+            .unwrap()
+            .abs()
+            .max(report.sync_ms_max.unwrap().abs());
+        assert!(worst <= 1000.0 / 30.0, "{report:?}");
+        report
     }
 
     /// Waits until `seconds` of the (synthetic) recording are written.
@@ -419,7 +529,7 @@ mod tests {
         }
     }
 
-    use crate::testpattern::{Geometry, Report, analyze_dir};
+    use crate::testpattern::{Geometry, Report, analyze_dir, analyze_video};
 
     fn check(dir: &std::path::Path, still: bool) -> Report {
         let report = analyze_dir(dir, &Geometry::synthetic(640, 60, still), 30.0).unwrap();
@@ -451,7 +561,19 @@ mod tests {
     }
 
     #[test]
-    fn records_synthetic_screen_and_mic() {
+    fn lists_the_cameras() {
+        // No camera is needed (CI has none); whatever is listed has a usable size.
+        let cameras = cameras();
+        assert!(
+            cameras
+                .iter()
+                .all(|c| c.width > 0 && c.height > 0 && c.height <= 720 && !c.id.is_empty())
+        );
+        assert!(cameras.iter().filter(|c| c.default).count() <= 1);
+    }
+
+    #[test]
+    fn records_synthetic_screen_camera_and_mic() {
         let dir = temp_dir("basic");
         let rec = Recorder::start(&synthetic(dir.clone(), 640, 360, false)).unwrap();
         wait_for(&rec, 10.0);
@@ -477,6 +599,25 @@ mod tests {
             (0, 0, 2),
             "{report:?}"
         );
+        // The camera: every slot a new picture (its counter steps by one), as many frames as
+        // the screen, none lost.
+        assert_eq!(status.camera_frames, status.frames, "{status:?}");
+        assert_eq!(status.camera_frames_new, status.camera_frames, "{status:?}");
+        assert_eq!(
+            (status.camera_frames_dropped, status.camera_frames_lost),
+            (0, 0)
+        );
+        let camera = check_camera(&dir, &status);
+        assert_eq!(
+            (
+                camera.stale,
+                camera.unchanged,
+                camera.max_step,
+                camera.unmatched_markers
+            ),
+            (0, 0, 1, 0),
+            "{camera:?}"
+        );
         // The encoder settings the export relies on.
         let screen = crate::probe::probe(&dir.join("screen.mp4")).unwrap();
         let video = screen.video().unwrap();
@@ -490,6 +631,13 @@ mod tests {
             Some(["bt709".into(), "bt709".into(), "bt709".into()])
         );
         assert_eq!((video.width, video.height), (Some(640), Some(360)));
+        let camera = crate::probe::probe(&dir.join("camera.mp4")).unwrap();
+        let cv = camera.video().unwrap();
+        assert_eq!(
+            (cv.codec.as_str(), cv.profile.as_deref()),
+            ("h264", Some("High"))
+        );
+        assert_eq!((cv.width, cv.height), (Some(CAMERA_W), Some(CAMERA_H)));
         let mic = crate::probe::probe(&dir.join("mic.mp4")).unwrap();
         let audio = mic.audio().unwrap();
         assert_eq!(audio.codec, "aac");
@@ -517,6 +665,8 @@ mod tests {
             (report.frames as f64 / 30.0 - status.elapsed).abs() < 0.1,
             "{report:?} {status:?}"
         );
+        let camera = check_camera(&dir, &status);
+        assert_eq!((camera.stale, camera.unchanged), (0, 0), "{camera:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -563,8 +713,8 @@ mod tests {
         child.kill().unwrap(); // SIGKILL: no chance to finish the files
         child.wait().unwrap();
         let recorded = elapsed();
-        // Both files play as they are, and lose at most 2 s.
-        for name in ["screen.mp4", "mic.mp4"] {
+        // Every file plays as it is, and loses at most 2 s.
+        for name in ["screen.mp4", "camera.mp4", "mic.mp4"] {
             let info = crate::probe::probe(&dir.join(name)).unwrap();
             eprintln!("{name}: {:.2} s of {recorded:.2} s kept", info.duration_s);
             assert!(
@@ -605,6 +755,11 @@ mod tests {
             .abs()
             .max(report.sync_ms_max.unwrap().abs());
         assert!(worst <= 1000.0 / 30.0, "{report:?}");
+        // The camera over the same hour: no gaps, no drift.
+        let camera = check_camera(&dir, &status);
+        eprintln!("camera: {camera:?}");
+        assert_eq!(camera.stale, 0, "{camera:?}");
+        assert!(camera.markers >= 3598, "{camera:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -654,6 +809,11 @@ mod tests {
         let audio = status.audio_samples as f64 / 48_000.0;
         assert!((video - audio).abs() <= 1.0 / 30.0, "{video} vs {audio}");
         assert!((video - 12.0).abs() < 0.2, "{video}");
+        // The camera pauses with the screen and stays in sync too.
+        assert_eq!(status.camera_frames, status.frames, "{status:?}");
+        let camera = check_camera(&dir, &status);
+        assert_eq!(camera.stale, 0, "{camera:?}");
+        assert!(camera.unmatched_markers <= 2, "{camera:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
