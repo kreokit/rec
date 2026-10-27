@@ -32,6 +32,17 @@ use crate::sound::{self, Mix, RATE};
 pub const AUDIO_RATE: u32 = 48_000;
 /// How far the loudness may be from the preset (the presets promise ±0.5 LU).
 pub const LOUDNESS_TOLERANCE_LU: f64 = 0.5;
+/// A true peak at least this high means the limiter is holding the sound back.
+pub const PEAK_HELD_DB: f64 = -2.0;
+
+/// The sound stayed quieter than the preset because its peaks are at the limit: very
+/// spiky sound (clicks, hard taps; measured 2026-10-27 on the synthetic clicks, 24 dB
+/// between peak and loudness, which stop at −22 LUFS for −16). Never going over −1 dBTP
+/// wins over the loudness: louder would distort it.
+pub fn held_by_peaks(target: Option<f64>, lufs: Option<f64>, true_peak_db: f64) -> bool {
+    matches!((target, lufs), (Some(t), Some(l)) if l < t - LOUDNESS_TOLERANCE_LU)
+        && true_peak_db >= PEAK_HELD_DB
+}
 pub const CANCELLED: &str = "cancelled";
 
 /// What the export needs to know about the recording and the choices.
@@ -348,7 +359,7 @@ pub fn check(
             lengths.push(("sound", facts.audio_s));
             if let (Some(t), Some(l)) = (target, lufs) {
                 expect(
-                    (l - t).abs() <= LOUDNESS_TOLERANCE_LU,
+                    (l - t).abs() <= LOUDNESS_TOLERANCE_LU || held_by_peaks(target, lufs, peak),
                     format!("loudness {l:.1} LUFS instead of {t:.0}"),
                 );
             }
@@ -386,6 +397,8 @@ pub struct Done {
     pub encoder: String,
     pub lufs: Option<f64>,
     pub true_peak_db: Option<f64>,
+    /// Quieter than the preset because louder would distort the peaks.
+    pub held_by_peaks: bool,
 }
 
 /// Exports `job` to `dest`. `replace`: an existing file there is replaced; otherwise it's
@@ -521,6 +534,9 @@ pub fn export(
                 encoder: encoder.to_string(),
                 lufs: read.and_then(|r| r.0),
                 true_peak_db: read.map(|r| r.1),
+                held_by_peaks: read.is_some_and(|(lufs, peak)| {
+                    held_by_peaks(job.settings.loudness.lufs(), lufs, peak)
+                }),
             })
         }
         Err(e) => {
@@ -919,6 +935,62 @@ pub mod tests {
                 _ => assert!(b > 150 && r < 80, "screen {r} {b}"),
             }
         }
+    }
+
+    /// Clicks only (the synthetic microphone's kind of sound): the preset can't be reached
+    /// under −1 dBTP, so the export is as loud as it can be and says so.
+    #[test]
+    fn spiky_sound_is_held_by_its_peaks_not_distorted() {
+        let dir = colour_recording("export-clicks", 4.0, (640, 360), (320, 240));
+        let mut clicks = vec![0.0f32; 4 * 48_000];
+        for second in 0..4 {
+            // A hard tap: a 3 kHz burst dying away within 5 ms.
+            for i in 0..240 {
+                let t = i as f32 / 48_000.0;
+                clicks[second * 48_000 + 2_400 + i] =
+                    0.6 * (-t / 0.001).exp() * (2.0 * std::f32::consts::PI * 3_000.0 * t).sin();
+            }
+        }
+        let ffmpeg = ffmpeg::locate("ffmpeg").unwrap();
+        let mut e = Command::new(&ffmpeg)
+            .args(sound::input_args(1))
+            .args(sound::AAC_ARGS)
+            .arg(dir.join("mic.mp4"))
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        let bytes: Vec<u8> = clicks.iter().flat_map(|s| s.to_le_bytes()).collect();
+        e.stdin.take().unwrap().write_all(&bytes).unwrap();
+        assert!(e.wait().unwrap().success());
+        let s = session((640, 360), None, true);
+        let set = settings(Layout::Screen, Bubble::default());
+        let job = Job {
+            dir: &dir,
+            session: &s,
+            settings: &set,
+            duration_s: 4.0,
+        };
+        let done = export(
+            &job,
+            &dir.join("clicks.mp4"),
+            true,
+            &AtomicBool::new(false),
+            &mut |_, _| {},
+        )
+        .unwrap();
+        assert!(
+            done.held_by_peaks,
+            "{:?} {:?}",
+            done.lufs, done.true_peak_db
+        );
+        assert!(done.lufs.unwrap() < -16.5);
+        assert!(done.true_peak_db.unwrap() <= sound::MAX_TRUE_PEAK_DB + 0.05);
+        assert!(!held_by_peaks(Some(-16.0), Some(-16.2), -1.1), "on target");
+        assert!(
+            !held_by_peaks(Some(-16.0), Some(-22.0), -6.0),
+            "quiet without a reason"
+        );
     }
 
     #[test]

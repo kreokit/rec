@@ -227,6 +227,34 @@ export interface SoundProgress {
   fraction: number;
 }
 
+/** Where the export goes (src-tauri/src/lib.rs `ExportTarget`). */
+export interface ExportTarget {
+  folder: string;
+  name: string;
+  /** A file of that name is already there. */
+  exists: boolean;
+  estimated_bytes: number;
+  free_bytes: number | null;
+}
+
+/** Progress of an export (event "export-progress"). */
+export interface ExportProgress {
+  id: string;
+  stage: "sound" | "picture" | "check";
+  fraction: number;
+}
+
+/** A finished, checked export (export.rs `Done`). */
+export interface ExportDone {
+  path: string;
+  facts: { width: number; height: number; video_s: number; audio_s: number; profile: string };
+  encoder: string;
+  lufs: number | null;
+  true_peak_db: number | null;
+  /** Quieter than the preset because louder would distort the peaks. */
+  held_by_peaks: boolean;
+}
+
 /** A recording's tracks (absolute paths; null when not recorded). */
 export interface Media {
   screen: string | null;
@@ -326,6 +354,12 @@ export const api = {
   /** The preview's processed sound for these choices (null without sound); rejects "cancelled" when replaced. */
   prepareSound: (id: string, clean: boolean, loudness: Loudness) =>
     invoke<string | null>("prepare_sound", { id, clean, loudness }),
+  exportTarget: (id: string) => invoke<ExportTarget>("export_target", { id }),
+  setExportFolder: (folder: string) => invoke<void>("set_export_folder", { folder }),
+  /** With the saved Finish choices; rejects "cancelled" after Cancel. */
+  exportRecording: (id: string, replace: boolean) => invoke<ExportDone>("export_recording", { id, replace }),
+  cancelExport: () => invoke<void>("cancel_export"),
+  showExport: () => invoke<void>("show_export"),
   pendingRecoveries: () => invoke<Session[]>("pending_recoveries"),
   recoverRecording: (id: string) => invoke<Session>("recover_recording", { id }),
   /** null in releases (no Tests screen). */

@@ -890,10 +890,6 @@ async fn export_recording(
 ) -> Result<export::Done, String> {
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     *app.state::<ExportState>().cancel.lock().unwrap() = Some(cancel.clone());
-    // The preview's sound job would compete for the CPU.
-    if let Some(job) = app.state::<SoundJob>().0.lock().unwrap().take() {
-        job.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
     blocking(move || {
         let (dir, session, settings, duration_s) = export_job_parts(&app, &id)?;
         let folder = export_folder(&app)?;

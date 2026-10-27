@@ -7,10 +7,12 @@ import {
   ArrowUpLeft,
   ArrowUpRight,
   CircleCheck,
+  Download,
   Pause,
   Play,
   TriangleAlert,
 } from "lucide-react";
+import { ExportDialogs, ExportSection, useExport } from "./Export";
 import { Stage } from "./Stage";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
@@ -95,6 +97,8 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
         api.saveFinishSettings(session.id, next).catch((e) => toast(String(e), "error")),
       );
   };
+
+  const flow = useExport(session.id, () => saving.current);
 
   // The trim follows the handles while dragging; it's saved when they're let go.
   const [trim, setTrim] = useState<Trim>({ start: 0, end: duration });
@@ -209,7 +213,19 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
           </>
         }
         onHome={onHome}
-      />
+      >
+        <Button
+          variant="primary"
+          icon={Download}
+          disabled={!settings || flow.busy}
+          onClick={() => {
+            player.pause();
+            void flow.start().catch((e) => toast(String(e), "error"));
+          }}
+        >
+          Export MP4
+        </Button>
+      </TopBar>
       <main className="finish-main">
         <div className="finish-work">
           <div className={ok ? "finish-check" : "finish-check problem"} role="status">
@@ -350,9 +366,11 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
                 ) : null}
               </section>
             )}
+            <ExportSection flow={flow} />
           </aside>
         )}
       </main>
+      <ExportDialogs flow={flow} />
     </div>
   );
 }
