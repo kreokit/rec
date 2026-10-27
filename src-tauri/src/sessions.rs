@@ -465,6 +465,7 @@ impl Recordings {
                 display_id: options.display_id,
                 region,
                 window: window.map(|w| w.id),
+                exclude_windows: Vec::new(),
                 width,
                 height,
                 fps: 30,

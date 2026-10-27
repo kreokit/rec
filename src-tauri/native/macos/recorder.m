@@ -357,6 +357,7 @@ static NSDictionary *floatMonoSettings(void) {
   @public
     KrRecConfig cfg;
     NSString *dir, *micId, *cameraId;
+    NSArray<NSNumber *> *excludeIds; // cfg.exclude_windows
     dispatch_queue_t q;
     double t0;
     double pausedTotal, pauseStart; // pauseStart < 0: not paused
@@ -973,7 +974,10 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
                 *message = @"The screen can't be recorded. Allow KreoKit Rec under System Settings > Privacy & Security > Screen Recording, then restart the app.";
                 return NO;
             }
-            filter = [[SCContentFilter alloc] initWithDisplay:found excludingWindows:@[]];
+            NSMutableArray<SCWindow *> *excluded = [NSMutableArray array];
+            for (SCWindow *w in content.windows)
+                if ([excludeIds containsObject:@(w.windowID)]) [excluded addObject:w];
+            filter = [[SCContentFilter alloc] initWithDisplay:found excludingWindows:excluded];
         }
         SCStreamConfiguration *c = [SCStreamConfiguration new];
         c.width = (size_t)cfg.width;
@@ -1133,6 +1137,11 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
         rec->cfg.dir = NULL;
         rec->cfg.mic_id = NULL;
         rec->cfg.camera_id = NULL;
+        NSMutableArray *exclude = [NSMutableArray array];
+        for (int i = 0; config->exclude_windows && i < config->exclude_count; i++) [exclude addObject:@(config->exclude_windows[i])];
+        rec->excludeIds = exclude;
+        rec->cfg.exclude_windows = NULL;
+        rec->cfg.exclude_count = 0;
         if (rec->cfg.capture_fps < rec->cfg.fps) rec->cfg.capture_fps = rec->cfg.fps;
         rec->q = dispatch_queue_create("kreokit.rec.capture", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0));
         rec->pauses = [NSMutableArray array];

@@ -69,6 +69,18 @@ pub fn analyze(dir: &Path) -> Result<Value, String> {
             "file": report,
             "pattern_age_ms": lags,
         });
+        if let Some(ex) = info.get("excluded") {
+            let f = |k: &str| ex[k].as_f64().unwrap_or(0.0);
+            let (shown, of) = testpattern::stripes_shown(
+                &dir.join("screen.mp4"),
+                f("x"),
+                f("y"),
+                f("width"),
+                f("stripe"),
+            )?;
+            // 0 when the window was kept out of the recording.
+            result["excluded_window_shown"] = json!({ "frames": shown, "of": of });
+        }
         if info["camera"] == true {
             // Every track: frames written vs in the files, start/end offsets (drift).
             let status: Option<Status> = serde_json::from_value(info["status"].clone()).ok();
@@ -363,6 +375,7 @@ mod tests {
             screen: Some(ScreenConfig {
                 region: None,
                 window: None,
+                exclude_windows: Vec::new(),
                 display_id: 0,
                 width: 640,
                 height: 360,

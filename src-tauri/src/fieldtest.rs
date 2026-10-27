@@ -176,6 +176,7 @@ fn screen(
         display_id: display.id,
         region,
         window,
+        exclude_windows: Vec::new(),
         width: w,
         height: h,
         fps: 30,

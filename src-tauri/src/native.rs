@@ -28,6 +28,10 @@ pub struct ScreenConfig {
     /// shape. When it closes, the recording goes on with its last picture.
     #[serde(default)]
     pub window: Option<u32>,
+    /// Windows kept out of the picture (the app's own controls), where the system allows it
+    /// (macOS: ScreenCaptureKit only).
+    #[serde(default)]
+    pub exclude_windows: Vec<u32>,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -198,6 +202,8 @@ mod macos {
         region_width: f64,
         region_height: f64,
         window_id: u32,
+        exclude_windows: *const u32,
+        exclude_count: c_int,
         mic: c_int,
         mic_id: *const c_char,
         camera: c_int,
@@ -357,6 +363,8 @@ mod macos {
                 region_width: region.map_or(0.0, |r| r.width),
                 region_height: region.map_or(0.0, |r| r.height),
                 window_id: screen.and_then(|s| s.window).unwrap_or(0),
+                exclude_windows: screen.map_or(std::ptr::null(), |s| s.exclude_windows.as_ptr()),
+                exclude_count: screen.map_or(0, |s| s.exclude_windows.len() as c_int),
                 mic: config.mic.is_some() as c_int,
                 mic_id: mic_id.as_ptr(),
                 camera: camera.is_some() as c_int,
@@ -703,6 +711,7 @@ pub(crate) mod tests {
                 display_id: 0,
                 region: None,
                 window: None,
+                exclude_windows: Vec::new(),
                 width,
                 height,
                 fps: 30,

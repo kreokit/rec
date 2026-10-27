@@ -957,6 +957,7 @@ mod tests {
                 display_id: 0,
                 region,
                 window: None,
+                exclude_windows: Vec::new(),
                 width: w,
                 height: h,
                 fps: 30,

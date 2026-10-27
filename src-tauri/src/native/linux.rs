@@ -1044,6 +1044,7 @@ mod tests {
                     height: 360.0,
                 }),
                 window: None,
+                exclude_windows: Vec::new(),
                 width: 640,
                 height: 360,
                 fps: 30,

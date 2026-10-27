@@ -156,6 +156,30 @@ pub fn read_frames(video: &Path, g: &Geometry) -> Result<Vec<Frame>, String> {
         .collect())
 }
 
+/// Whether a pixel row shows black and white stripes `stripe` pixels wide (the bench's
+/// stand-in for the app's own controls): at least 80 % of neighbouring stripes, read at
+/// their middles, differ by more than half the range.
+pub fn stripes_in(row: &[u8], stripe: f64) -> bool {
+    let middles: Vec<u8> = (0..)
+        .map(|i| ((i as f64 + 0.5) * stripe).round() as usize)
+        .take_while(|&x| x < row.len())
+        .map(|x| row[x])
+        .collect();
+    let pairs = middles.len().saturating_sub(1);
+    let changes = middles
+        .windows(2)
+        .filter(|p| (p[0] as i32 - p[1] as i32).abs() > 128)
+        .count();
+    pairs >= 4 && changes * 5 >= pairs * 4
+}
+
+/// How many frames of `video` show the stripes in the row at (x, y), `width` pixels wide,
+/// and how many frames there are.
+pub fn stripes_shown(video: &Path, x: f64, y: f64, width: f64, stripe: f64) -> Result<(usize, usize), String> {
+    let frames = rows(video, x.round() as u32, y.round() as u32, width.floor() as u32)?;
+    Ok((frames.iter().filter(|r| stripes_in(r, stripe)).count(), frames.len()))
+}
+
 /// The sound as 48 kHz mono samples, from the stream's start on the file's timeline.
 pub fn read_audio(audio: &Path) -> Result<(Vec<f32>, f64), String> {
     let start = probe::probe(audio)?
@@ -328,5 +352,19 @@ mod tests {
         s[500] = 0.5; // the same click
         s[48_000] = -0.6;
         assert_eq!(onsets(&s, 0.5, 0.25, 0.5), vec![0.51, 1.5]);
+    }
+
+    #[test]
+    fn stripes_are_told_from_other_pictures() {
+        let stripes: Vec<u8> = (0..160).map(|x| if (x / 8) % 2 == 0 { 16 } else { 235 }).collect();
+        assert!(stripes_in(&stripes, 8.0));
+        // Flipped (the stand-in alternates twice a second) and cut short at the edge.
+        let flipped: Vec<u8> = (0..150).map(|x| if (x / 8) % 2 == 0 { 235 } else { 16 }).collect();
+        assert!(stripes_in(&flipped, 8.0));
+        assert!(!stripes_in(&[128; 160], 8.0));
+        // Text-like detail at another spacing isn't counted.
+        let text: Vec<u8> = (0..160).map(|x| if (x / 3) % 2 == 0 { 16 } else { 235 }).collect();
+        assert!(!stripes_in(&text, 8.0));
+        assert!(!stripes_in(&stripes[..20], 8.0));
     }
 }

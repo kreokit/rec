@@ -32,6 +32,12 @@ typedef struct {
     // The output size above is the window's shape. When it closes, the recording goes on with
     // its last picture (KrRecStatus.window_closed).
     uint32_t window_id;
+    // Windows kept out of the picture (CGWindowIDs, e.g. the app's own controls). Only
+    // ScreenCaptureKit can do this; CGDisplayStream records them anyway. Read during
+    // kr_rec_start only. On macOS 12 ScreenCaptureKit delivers display pictures only when at
+    // least one window is excluded (docs/capture-research.md).
+    const uint32_t *exclude_windows;
+    int exclude_count;
     int mic;             // 1: record a microphone
     const char *mic_id;  // AVCaptureDevice uniqueID; NULL or "": the default microphone
     int camera;                       // 1: record a camera
