@@ -3,11 +3,13 @@
 // Started as the app bundle (`open -n "KreoKit Rec Test.app" --args --bench ...`) so macOS
 // asks for permission for the app itself; `rec --bench-analyze DIR` reads the results.
 //
-//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60] [--mic]
+//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60] [--mic] [--camera]
 //       A small window shows the test pattern of src/testpattern.rs: a counter that steps
 //       60 times a second and stands still for 2 s of every 10 s. The recording shows
 //       whether every output frame caught the newest picture (fresh), repeated it because
-//       nothing changed (unchanged), or missed a change (stale).
+//       nothing changed (unchanged), or missed a change (stale). --camera also records the
+//       default camera at 720p (the long run of screen + camera + mic); the process's CPU
+//       use is reported too.
 //   --bench sync --out DIR [--seconds 45]
 //       The tap test for sound against picture. The window waits in front of everything
 //       until the user clicks it and presses space; that first press starts the
@@ -15,8 +17,22 @@
 //       each press makes a click the microphone hears, and the window flashes white at
 //       that moment. The offsets between the flashes and the clicks in the recording are
 //       the sync of the two tracks (plus the screen's own delay to show the flash).
+//   --bench camera --out DIR [--seconds 45]
+//       The clap test for the camera against the microphone: camera (720p) + mic only,
+//       starting 3 s after launch. The user claps about once a second in view of the
+//       camera; the analysis finds each clap in the sound and the hands meeting in the
+//       picture (the largest change from one frame to the next).
+
+#include <sys/resource.h>
 
 #include "recorder.h"
+
+// CPU seconds this process has used (all threads, user + system).
+static double cpuSeconds(void) {
+    struct rusage u;
+    getrusage(RUSAGE_SELF, &u);
+    return u.ru_utime.tv_sec + u.ru_utime.tv_usec / 1e6 + u.ru_stime.tv_sec + u.ru_stime.tv_usec / 1e6;
+}
 
 #import <AppKit/AppKit.h>
 #import <CoreMedia/CoreMedia.h>
@@ -97,7 +113,10 @@ static NSDictionary *statusJson(const KrRecStatus *s) {
     return @{
         @"elapsed" : @(s->elapsed), @"frames" : @(s->frames), @"frames_new" : @(s->frames_new), @"frames_repeated" : @(s->frames_repeated),
         @"frames_late" : @(s->frames_late), @"frames_dropped" : @(s->frames_dropped), @"audio_samples" : @(s->audio_samples),
-        @"audio_filled" : @(s->audio_filled), @"audio_dropped" : @(s->audio_dropped), @"failed" : @(s->failed),
+        @"audio_filled" : @(s->audio_filled), @"audio_dropped" : @(s->audio_dropped), @"failed" : s->failed ? @YES : @NO,
+        @"camera_frames" : @(s->camera_frames), @"camera_frames_new" : @(s->camera_frames_new),
+        @"camera_frames_repeated" : @(s->camera_frames_repeated), @"camera_frames_late" : @(s->camera_frames_late),
+        @"camera_frames_dropped" : @(s->camera_frames_dropped), @"camera_frames_lost" : @(s->camera_frames_lost),
     };
 }
 
@@ -117,7 +136,7 @@ int kr_bench_main(int argc, const char **argv) {
         NSString *mode = nil, *out = nil, *api = @"auto";
         double seconds = 0;
         int captureFps = 60;
-        BOOL mic = NO;
+        BOOL mic = NO, camera = NO;
         for (int i = 1; i < argc; i++) {
             const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : "";
             if (!strcmp(a, "--bench")) mode = @(v), i++;
@@ -126,21 +145,24 @@ int kr_bench_main(int argc, const char **argv) {
             else if (!strcmp(a, "--api")) api = @(v), i++;
             else if (!strcmp(a, "--capture-fps")) captureFps = atoi(v), i++;
             else if (!strcmp(a, "--mic")) mic = YES;
+            else if (!strcmp(a, "--camera")) camera = YES;
         }
         if ([mode isEqual:@"check"]) {
             // What this app may record, and the devices it sees (no recording).
-            char *displays = kr_displays_json(), *mics = kr_mics_json();
-            printf("{\"screen\": %d, \"mic\": %d, \"displays\": %s, \"mics\": %s}\n", kr_screen_access(), kr_mic_access(), displays, mics);
+            char *displays = kr_displays_json(), *mics = kr_mics_json(), *cameras = kr_cameras_json();
+            printf("{\"screen\": %d, \"mic\": %d, \"camera\": %d, \"displays\": %s, \"mics\": %s, \"cameras\": %s}\n", kr_screen_access(),
+                   kr_mic_access(), kr_camera_access(), displays, mics, cameras);
             kr_free(displays);
             kr_free(mics);
+            kr_free(cameras);
             return 0;
         }
-        BOOL sync = [mode isEqual:@"sync"];
-        if (!out || !(sync || [mode isEqual:@"fresh"])) {
-            fprintf(stderr, "usage: --bench fresh|sync --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic]\n");
+        BOOL sync = [mode isEqual:@"sync"], clap = [mode isEqual:@"camera"];
+        if (!out || !(sync || clap || [mode isEqual:@"fresh"])) {
+            fprintf(stderr, "usage: --bench fresh|sync|camera --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic] [--camera]\n");
             return 2;
         }
-        if (seconds <= 0) seconds = sync ? 45 : 60;
+        if (seconds <= 0) seconds = sync || clap ? 45 : 60;
         [[NSFileManager defaultManager] createDirectoryAtPath:out withIntermediateDirectories:YES attributes:nil error:nil];
         NSApplication *app = NSApplication.sharedApplication;
         app.activationPolicy = sync ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory;
@@ -152,7 +174,11 @@ int kr_bench_main(int argc, const char **argv) {
         NSWindow *window;
         NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:@{@"mode" : mode, @"width" : @(w), @"height" : @(h), @"capture_fps" : @(captureFps), @"api" : api}];
         KRFlashView *flash = nil;
-        if (sync) {
+        if (clap) {
+            window = nil;
+            camera = YES;
+            mic = YES;
+        } else if (sync) {
             NSRect frame = NSMakeRect(0, 0, 760, 440);
             window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
             window.title = @"KreoKit Rec: sync test";
@@ -199,8 +225,14 @@ int kr_bench_main(int argc, const char **argv) {
         cfg.screen_api = [api isEqual:@"cgd"] ? KR_SCREEN_CGDISPLAYSTREAM : [api isEqual:@"sck"] ? KR_SCREEN_SCREENCAPTUREKIT : KR_SCREEN_AUTO;
         cfg.video_bitrate = (int)(w * h * 30 * 0.13);
         cfg.mic = mic;
+        cfg.screen = !clap;
+        cfg.camera = camera;
+        cfg.camera_width = 1280;
+        cfg.camera_height = 720;
+        cfg.camera_bitrate = (int)(1280 * 720 * 30 * 0.13);
+        info[@"camera"] = @(camera);
         __block void *rec = NULL;
-        __block double t0 = 0;
+        __block double t0 = 0, cpu0 = 0, wall0 = 0;
         void (^begin)(void) = ^{
             char error[1024] = {0};
             KrRecConfig c = cfg;
@@ -211,6 +243,8 @@ int kr_bench_main(int argc, const char **argv) {
                 exit(1);
             }
             fprintf(stderr, "recording %.0f s into %s\n", seconds, out.UTF8String);
+            cpu0 = cpuSeconds();
+            wall0 = hostNow();
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
                 KrRecStatus s;
                 kr_rec_status(rec, &s);
@@ -219,6 +253,8 @@ int kr_bench_main(int argc, const char **argv) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.5 + seconds) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 KrRecStatus s;
                 char error[1024] = {0};
+                // Share of one CPU core while recording (before the files are finished).
+                info[@"cpu_percent"] = @(round((cpuSeconds() - cpu0) / (hostNow() - wall0) * 1000) / 10);
                 int result = kr_rec_stop(rec, &s, error, sizeof error);
                 info[@"status"] = statusJson(&s);
                 if (result) info[@"error"] = @(error);
@@ -237,6 +273,9 @@ int kr_bench_main(int argc, const char **argv) {
             // and has the keyboard).
             fprintf(stderr, "waiting for the first press\n");
             flash.onFirstPress = begin;
+        } else if (clap) {
+            fprintf(stderr, "clap about once a second in view of the camera; starting in 3 s\n");
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), begin);
         } else {
             // Starts once the pattern window is on screen.
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), begin);
