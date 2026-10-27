@@ -216,6 +216,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn analyzes_a_fresh_bench_recording() {
+        let _timing = crate::native::tests::alongside();
         use crate::native::*;
         let dir = std::env::temp_dir().join("kreokit-rec-bench-test");
         let _ = std::fs::remove_dir_all(&dir);

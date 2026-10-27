@@ -552,8 +552,24 @@ mod other {
 }
 
 #[cfg(all(test, target_os = "macos"))]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
+
     use super::*;
+
+    /// Timing tests run alone: the fast synthetic tests keep the encoder busy, and a
+    /// real-time test next to them would measure that load, not the recorder.
+    static TIMING: RwLock<()> = RwLock::new(());
+
+    /// For a test that measures real-time behaviour.
+    pub fn alone() -> RwLockWriteGuard<'static, ()> {
+        TIMING.write().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// For a test that records (as fast as the encoder allows) next to other such tests.
+    pub fn alongside() -> RwLockReadGuard<'static, ()> {
+        TIMING.read().unwrap_or_else(|e| e.into_inner())
+    }
 
     pub fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir()
@@ -675,6 +691,7 @@ mod tests {
 
     #[test]
     fn previews_the_synthetic_camera() {
+        let _timing = alone();
         preview_start("", 320, 180, true).unwrap();
         let mut seq = 0;
         let start = std::time::Instant::now();
@@ -701,6 +718,7 @@ mod tests {
 
     #[test]
     fn records_synthetic_screen_camera_and_mic() {
+        let _timing = alongside();
         let dir = temp_dir("basic");
         let rec = Recorder::start(&synthetic(dir.clone(), 640, 360, false)).unwrap();
         wait_for(&rec, 10.0);
@@ -774,6 +792,7 @@ mod tests {
 
     #[test]
     fn paces_frames_in_real_time() {
+        let _timing = alone();
         // The timer-driven pacer, as with a real screen: synthetic sources on the host clock.
         let dir = temp_dir("realtime");
         let mut config = synthetic(dir.clone(), 640, 360, false);
@@ -783,20 +802,29 @@ mod tests {
         let (status, error) = rec.stop();
         assert_eq!(error, None);
         let report = check(&dir, false);
-        // On a loaded CI VM (no GPU, no hardware encoder, every test at once) a few slots
-        // can repeat; on a real Mac none may.
-        let allowed = if on_ci() { report.frames / 20 } else { 0 };
-        assert!(
-            report.stale + report.unchanged <= allowed,
-            "{report:?} {status:?}"
-        );
+        late_only(&report, status.frames_late, &format!("{status:?}"));
         assert!(
             (report.frames as f64 / 30.0 - status.elapsed).abs() < 0.1,
             "{report:?} {status:?}"
         );
         let camera = check_camera(&dir, &status);
-        assert!(camera.stale + camera.unchanged <= allowed, "{camera:?}");
+        late_only(&camera, status.camera_frames_late, "camera");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A real-time recording repeats a slot only when its frame arrived after the slot was
+    /// written, never when it came on time; and that stays rare. Late frames happen when the
+    /// machine pauses the generator: ~100 ms pauses on the dev Mac even with nothing else
+    /// running, more on CI's VMs. The recorder counts them; a real screen behaves the same.
+    fn late_only(report: &Report, late: i64, what: &str) {
+        assert!(
+            report.stale + report.unchanged <= late as usize,
+            "repeated slots without late frames: {report:?} {what}"
+        );
+        assert!(
+            late as usize <= report.frames / 10,
+            "too many late frames ({late}): {report:?} {what}"
+        );
     }
 
     /// Run by `survives_being_killed` in a child process: records until killed.
@@ -811,9 +839,10 @@ mod tests {
         config.synthetic = Some(Synthetic::default());
         let rec = Recorder::start(&config).unwrap();
         loop {
-            // What was recorded so far, for the parent to compare with the files.
-            let elapsed = rec.status().elapsed;
-            std::fs::write(dir.join("elapsed.tmp"), elapsed.to_string()).unwrap();
+            // What was recorded so far and how many frames came late, for the parent.
+            let status = rec.status();
+            let line = format!("{} {}", status.elapsed, status.frames_late);
+            std::fs::write(dir.join("elapsed.tmp"), line).unwrap();
             std::fs::rename(dir.join("elapsed.tmp"), dir.join("elapsed")).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
@@ -821,6 +850,7 @@ mod tests {
 
     #[test]
     fn survives_being_killed() {
+        let _timing = alone();
         let dir = temp_dir("crash");
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", "native::tests::crash_child"])
@@ -828,12 +858,13 @@ mod tests {
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        let elapsed = || -> f64 {
+        let progress = |field: usize| -> f64 {
             std::fs::read_to_string(dir.join("elapsed"))
                 .ok()
-                .and_then(|s| s.parse().ok())
+                .and_then(|s| s.split(' ').nth(field)?.parse().ok())
                 .unwrap_or(0.0)
         };
+        let elapsed = || progress(0);
         let start = std::time::Instant::now();
         while elapsed() < 6.5 {
             assert!(start.elapsed().as_secs() < 60, "the child didn't record");
@@ -842,6 +873,7 @@ mod tests {
         child.kill().unwrap(); // SIGKILL: no chance to finish the files
         child.wait().unwrap();
         let recorded = elapsed();
+        let late = progress(1) as i64;
         // Every file plays as it is, and loses at most 2 s (3 s on CI's VMs, whose
         // software encoder runs behind).
         let limit = if on_ci() { 3.0 } else { 2.0 };
@@ -855,9 +887,8 @@ mod tests {
             );
         }
         let report = analyze_dir(&dir, &Geometry::synthetic(640, 60, false), 30.0).unwrap();
-        // As in `paces_frames_in_real_time`: a few repeated slots only on a loaded CI VM.
-        let allowed = if on_ci() { report.frames / 20 } else { 0 };
-        assert!(report.stale <= allowed && report.bad == 0, "{report:?}");
+        assert_eq!(report.bad, 0, "{report:?}");
+        late_only(&report, late, "killed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -866,6 +897,7 @@ mod tests {
     #[test]
     #[ignore]
     fn simulated_hour() {
+        let _timing = alongside();
         let dir = temp_dir("hour");
         let rec = Recorder::start(&synthetic(dir.clone(), 340, 192, false)).unwrap();
         wait_for(&rec, 1200.0);
@@ -898,6 +930,7 @@ mod tests {
 
     #[test]
     fn repeats_the_picture_only_when_nothing_changed() {
+        let _timing = alongside();
         let dir = temp_dir("still");
         let rec = Recorder::start(&synthetic(dir.clone(), 640, 360, true)).unwrap();
         wait_for(&rec, 20.0);
@@ -915,6 +948,7 @@ mod tests {
 
     #[test]
     fn pause_and_resume_keep_sync() {
+        let _timing = alongside();
         let dir = temp_dir("pause");
         let rec = Recorder::start(&synthetic(dir.clone(), 640, 360, false)).unwrap();
         for (until, pause) in [(3.3, true), (3.3, false), (7.1, true), (7.1, false)] {

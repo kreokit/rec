@@ -271,6 +271,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn recovers_after_kill_9() {
+        let _timing = crate::native::tests::alone();
         let root = temp_root("kill9");
         let mut child = Command::new(std::env::current_exe().unwrap())
             .args(["--ignored", "--exact", "recovery::tests::kill_child"])
