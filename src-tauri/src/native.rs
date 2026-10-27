@@ -820,6 +820,40 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_region_is_cut_out_of_the_whole_display() {
+        let _timing = alongside();
+        // The made-up display (960 × 600 points) is captured whole at 2 pixels per point and
+        // the region cut out on the GPU, as on a real Mac. The pattern is drawn only inside
+        // the region and the rest is white: a wrong crop shows as white or a broken counter.
+        let dir = temp_dir("region");
+        let mut config = synthetic(dir.clone(), 640, 360, false);
+        config.screen.as_mut().unwrap().region = Some(Region {
+            x: 100.5,
+            y: 51.0,
+            width: 320.0,
+            height: 180.0,
+        });
+        let rec = Recorder::start(&config).unwrap();
+        wait_for(&rec, 4.0);
+        let (status, error) = rec.stop();
+        assert_eq!(error, None);
+        assert_eq!(status.frames_new, status.frames, "{status:?}");
+        check(&dir, false);
+        // Inside the edges, below the counter rows: the pattern's grey, not the white around it.
+        let output = std::process::Command::new(crate::ffmpeg::locate("ffmpeg").unwrap())
+            .args(["-v", "error", "-ss", "2", "-i"])
+            .arg(dir.join("screen.mp4"))
+            .args(["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"])
+            .output()
+            .unwrap();
+        let luma = |x: usize, y: usize| output.stdout[y * 640 + x];
+        for (x, y) in [(2, 200), (637, 200), (320, 357), (2, 357), (637, 357)] {
+            assert!(luma(x, y).abs_diff(128) < 12, "{x},{y}: {}", luma(x, y));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn devices_starting_late_fill_the_start() {
         let _timing = alongside();
         // A real camera's first picture comes ~0.9 s after the start: the slots before it

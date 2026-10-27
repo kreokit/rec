@@ -35,6 +35,7 @@ fn build_macos_recorder() {
         "Foundation",
         "ImageIO",
         "IOSurface",
+        "VideoToolbox",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");
     }

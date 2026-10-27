@@ -16,6 +16,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <VideoToolbox/VideoToolbox.h>
 #include <fcntl.h>
 #include <math.h>
 #include <pthread.h>
@@ -34,6 +35,8 @@ static const double kTie = 1e-6;
 // come after the start (the dev Mac's camera: 0.9 s, its mic: 0.35 s, measured 2026-10-27).
 static const double kCameraWarmUp = 1.0;
 static const double kMicWarmUp = 0.4;
+// The synthetic display's size in points (lib.rs's made-up display).
+static const CGSize kSynthDisplayPoints = {960, 600};
 // A small gap or overlap in the microphone's timestamps (jitter) is ignored up to this.
 static const int64_t kAudioTolerance = 96; // 2 ms
 
@@ -202,6 +205,7 @@ static void setError(char *error, size_t len, NSString *message) {
   @public
     CVPixelBufferRef pb;
     double t;
+    BOOL cropped; // a region: pb is already the region
 }
 @end
 @implementation KRFrame
@@ -350,6 +354,11 @@ static NSDictionary *floatMonoSettings(void) {
     _Atomic double synthNow;
     dispatch_semaphore_t synthDone;
     CVPixelBufferPoolRef synthPool, synthCameraPool;
+    // A region: the whole display is captured and the region cut out of each written frame.
+    VTPixelTransferSessionRef cropper;
+    CVPixelBufferPoolRef cropPool;
+    NSDictionary *cropAperture; // set on each source frame
+    CGRect synthRegion; // where the made-up screen draws its pattern (a region; else empty)
 }
 @end
 
@@ -387,7 +396,55 @@ API_AVAILABLE(macos(12.3))
 }
 @end
 
+// A region is captured as the whole display at the size where the region comes out at
+// the output size (`cfg.width` × `cfg.height`), and cut out of each written frame on the
+// GPU (VTPixelTransferSession). CGDisplayStream's own source rectangle records black on
+// macOS 12 (measured 2026-10-27); OBS also captures the whole display and crops.
+static void regionCapture(const KrRecConfig *c, CGSize displayPoints, size_t *width, size_t *height, CGRect *crop) {
+    double s = c->width / c->region_width; // output pixels per point
+    *width = (size_t)llround(displayPoints.width * s) & ~(size_t)1;
+    *height = (size_t)llround(displayPoints.height * s) & ~(size_t)1;
+    double x = MIN(llround(c->region_x * s) & ~1LL, (long long)*width - c->width);
+    double y = MIN(llround(c->region_y * s) & ~1LL, (long long)*height - c->height);
+    *crop = CGRectMake(MAX(x, 0), MAX(y, 0), c->width, c->height);
+}
+
 @implementation KRRecorder
+
+- (BOOL)setUpCrop:(CGRect)r from:(size_t)width :(size_t)height {
+    if (VTPixelTransferSessionCreate(NULL, &cropper) != noErr) return NO;
+    // The crop in clean-aperture form: size, and the centre's offset from the picture's centre.
+    NSDictionary *aperture = @{
+        (id)kCVImageBufferCleanApertureWidthKey : @(r.size.width),
+        (id)kCVImageBufferCleanApertureHeightKey : @(r.size.height),
+        (id)kCVImageBufferCleanApertureHorizontalOffsetKey : @(CGRectGetMidX(r) - width / 2.0),
+        (id)kCVImageBufferCleanApertureVerticalOffsetKey : @(CGRectGetMidY(r) - height / 2.0),
+    };
+    cropAperture = aperture;
+    if (VTSessionSetProperty(cropper, kVTPixelTransferPropertyKey_ScalingMode, kVTScalingMode_CropSourceToCleanAperture) != noErr) return NO;
+    NSDictionary *attrs = @{
+        (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+        (id)kCVPixelBufferWidthKey : @(cfg.width),
+        (id)kCVPixelBufferHeightKey : @(cfg.height),
+        (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
+    };
+    return CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &cropPool) == kCVReturnSuccess;
+}
+
+// Replaces a whole-display frame by its region (once per frame, when it's first written).
+- (void)crop:(KRFrame *)f {
+    if (!cropper || f->cropped) return;
+    f->cropped = YES;
+    CVBufferSetAttachment(f->pb, kCVImageBufferCleanApertureKey, (__bridge CFDictionaryRef)cropAperture, kCVAttachmentMode_ShouldNotPropagate);
+    CVPixelBufferRef out = NULL;
+    if (CVPixelBufferPoolCreatePixelBuffer(NULL, cropPool, &out) != kCVReturnSuccess || VTPixelTransferSessionTransferImage(cropper, f->pb, out) != noErr) {
+        CVPixelBufferRelease(out);
+        [self fail:@"The region can't be cut out of the screen picture on this Mac. Record the whole display instead, and tell us with Report a problem."];
+        return;
+    }
+    CVPixelBufferRelease(f->pb);
+    f->pb = out;
+}
 
 - (double)now {
     return cfg.synthetic_fast ? atomic_load(&synthNow) : hostSeconds();
@@ -450,6 +507,7 @@ API_AVAILABLE(macos(12.3))
             [p->frames removeObjectAtIndex:0];
         }
         if (pick) {
+            if (!p->camera) [self crop:pick];
             p->current = pick;
             p->fresh++;
         } else if (p->current) {
@@ -458,6 +516,7 @@ API_AVAILABLE(macos(12.3))
             // Slots before a source's first picture show that picture (a real camera's
             // first one comes about 0.9 s after the start, measured 2026-10-27). It stays
             // queued, so its own slot still gets it as new.
+            if (!p->camera) [self crop:p->frames[0]];
             p->current = p->frames[0];
             p->repeated++;
         } else {
@@ -467,6 +526,7 @@ API_AVAILABLE(macos(12.3))
                                      : @"No picture arrived from the screen. Check that KreoKit Rec may record the screen, then try again."];
             break; // waits for the first picture
         }
+        if (st.failed) break;
         KRItem *item = [KRItem new];
         item->pb = CVPixelBufferRetain(p->current->pb);
         item->index = p->slot;
@@ -581,15 +641,23 @@ API_AVAILABLE(macos(12.3))
 // 32-bit frame counter as black/white squares in the top row (34 cells across the
 // picture), and a white strip below it for one output frame from every whole second, when
 // the mic clicks (one output frame long, so a slot always catches it).
-static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
+// With a non-empty `area` (a region on the made-up display), the pattern fills only that
+// part and the rest is white, so a wrong crop shows in the recording.
+static void drawPatternIn(CVPixelBufferRef pb, int64_t n, BOOL marker, CGRect area) {
     CVPixelBufferLockBaseAddress(pb, 0);
-    size_t w = CVPixelBufferGetWidthOfPlane(pb, 0), h = CVPixelBufferGetHeightOfPlane(pb, 0);
+    size_t fw = CVPixelBufferGetWidthOfPlane(pb, 0), fh = CVPixelBufferGetHeightOfPlane(pb, 0);
     uint8_t *y = CVPixelBufferGetBaseAddressOfPlane(pb, 0);
     size_t ys = CVPixelBufferGetBytesPerRowOfPlane(pb, 0);
-    for (size_t r = 0; r < h; r++) memset(y + r * ys, 128, w);
     uint8_t *uv = CVPixelBufferGetBaseAddressOfPlane(pb, 1);
     size_t uvs = CVPixelBufferGetBytesPerRowOfPlane(pb, 1);
     for (size_t r = 0; r < CVPixelBufferGetHeightOfPlane(pb, 1); r++) memset(uv + r * uvs, 128, CVPixelBufferGetWidthOfPlane(pb, 1) * 2);
+    size_t ox = 0, oy = 0, w = fw, h = fh;
+    if (!CGRectIsEmpty(area)) {
+        for (size_t r = 0; r < fh; r++) memset(y + r * ys, 235, fw);
+        ox = (size_t)area.origin.x, oy = (size_t)area.origin.y, w = (size_t)area.size.width, h = (size_t)area.size.height;
+    }
+    y += oy * ys + ox;
+    for (size_t r = 0; r < h; r++) memset(y + r * ys, 128, w);
     size_t cell = w / 34;
     for (int b = 0; b < 32; b++) {
         uint8_t v = ((n >> (31 - b)) & 1) ? 235 : 16;
@@ -598,6 +666,8 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
     for (size_t r = cell * 2; r < cell * 4 && r < h; r++) memset(y + r * ys, marker ? 235 : 16, w);
     CVPixelBufferUnlockBaseAddress(pb, 0);
 }
+
+static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatternIn(pb, n, marker, CGRectNull); }
 
 // Runs the generated screen (capture_fps), camera (fps, its counter = its frame number) and
 // microphone (a 5 ms click every whole second from the start) until the stop. The screen's
@@ -638,7 +708,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
                 CVPixelBufferRef pb = NULL;
                 CVPixelBufferPoolCreatePixelBuffer(NULL, self->synthPool, &pb);
                 if (pb) {
-                    drawPattern(pb, n < 0 ? 0 : n, n >= 0 && n % cfps < cfps / self->cfg.fps);
+                    drawPatternIn(pb, n < 0 ? 0 : n, n >= 0 && n % cfps < cfps / self->cfg.fps, self->synthRegion);
                     [self ingest:pb at:t into:self->screenP];
                     CVPixelBufferRelease(pb);
                 }
@@ -677,16 +747,20 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
             (__bridge NSString *)kCGDisplayStreamYCbCrMatrix : (__bridge NSString *)kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
             (__bridge NSString *)kCGDisplayStreamQueueDepth : @8,
         }.mutableCopy;
+        size_t width = (size_t)cfg.width, height = (size_t)cfg.height;
         if (cfg.region_width > 0) {
-            CFDictionaryRef rect = CGRectCreateDictionaryRepresentation(
-                CGRectMake(cfg.region_x, cfg.region_y, cfg.region_width, cfg.region_height));
-            props[(__bridge NSString *)kCGDisplayStreamSourceRect] = (__bridge_transfer NSDictionary *)rect;
+            CGRect crop;
+            regionCapture(&cfg, CGDisplayBounds(display).size, &width, &height, &crop);
+            if (![self setUpCrop:crop from:width :height]) {
+                *message = @"Recording a region isn't possible on this Mac. Record the whole display instead.";
+                return NO;
+            }
         }
         __weak KRRecorder *weak = self;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
         cgd = CGDisplayStreamCreateWithDispatchQueue(
-            display, (size_t)cfg.width, (size_t)cfg.height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, (__bridge CFDictionaryRef)props, q,
+            display, width, height, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, (__bridge CFDictionaryRef)props, q,
             ^(CGDisplayStreamFrameStatus status, uint64_t displayTime, IOSurfaceRef surface, CGDisplayStreamUpdateRef update) {
                 KRRecorder *rec = weak;
                 if (!rec || status != kCGDisplayStreamFrameStatusFrameComplete || !surface) return;
@@ -872,6 +946,11 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
     if (pcmFormat) CFRelease(pcmFormat);
     if (synthPool) CVPixelBufferPoolRelease(synthPool);
     if (synthCameraPool) CVPixelBufferPoolRelease(synthCameraPool);
+    if (cropper) {
+        VTPixelTransferSessionInvalidate(cropper);
+        CFRelease(cropper);
+    }
+    if (cropPool) CVPixelBufferPoolRelease(cropPool);
 }
 
 @end
@@ -931,10 +1010,19 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
         atomic_store(&rec->synthNow, now);
         if (config->synthetic) {
             if (config->screen) {
+                // A region: the whole made-up display, through the same crop as a real one.
+                size_t width = (size_t)config->width, height = (size_t)config->height;
+                if (config->region_width > 0) {
+                    regionCapture(config, kSynthDisplayPoints, &width, &height, &rec->synthRegion);
+                    if (![rec setUpCrop:rec->synthRegion from:width :height]) {
+                        setError(error, error_len, @"Recording a region isn't possible on this Mac. Record the whole display instead.");
+                        return NULL;
+                    }
+                }
                 NSDictionary *attrs = @{
                     (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
-                    (id)kCVPixelBufferWidthKey : @(config->width),
-                    (id)kCVPixelBufferHeightKey : @(config->height),
+                    (id)kCVPixelBufferWidthKey : @(width),
+                    (id)kCVPixelBufferHeightKey : @(height),
                     (id)kCVPixelBufferIOSurfacePropertiesKey : @{},
                 };
                 CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)attrs, &rec->synthPool);
