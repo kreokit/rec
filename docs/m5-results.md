@@ -48,3 +48,26 @@ regions are recorded with ScreenCaptureKit, Rec's windows excluded, **whenever a
 stays (fresher, cheaper). The margin is small (lowest run 99.03 %), so step 10 repeats a
 run with the real floating control and bubble; if that falls under 99 %, macOS 12 falls back
 to the menu bar (choice 1).
+
+## Step 4: the floating control doesn't take the keyboard (macOS 12)
+
+Check copy with synthetic sources; a small probe app (`focusprobe`, scratchpad) holds the
+keyboard in a text field, then the control is clicked and the probe reports whether it is
+still the active app with the key window.
+
+| Control window | Click on Pause | Click on its background |
+|---|---|---|
+| Tauri `focusable(false)` only | **Rec becomes active** (probe loses the keyboard) | – |
+| + non-activating panel class and style | Rec becomes active | Rec becomes active |
+| + the window server's "prevents activation" flag | **probe keeps the keyboard**, Pause works | probe keeps it |
+
+- An NSWindow can't be non-activating; the control's window becomes an `NSPanel` subclass in
+  place (`window.m`), and after that class change the style alone doesn't reach the window
+  server: AppKit's `_setPreventsActivation:` (checked with `respondsToSelector:`) does. The
+  original class is put back before the window closes: closing it as the panel raised an
+  Objective-C exception in tao's event loop (crash, the recording itself was finished and
+  kept).
+- Tauri's drag region doesn't move a window that never becomes key: the control is dragged
+  by hand (pointer moves → `control_move`); dragged 100 × 338 points, it moved exactly that
+  far, the probe kept the keyboard, and the place was remembered for that display.
+- No click → the probe stays active (the control's polling doesn't activate the app).

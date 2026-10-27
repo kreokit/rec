@@ -6,6 +6,7 @@ import "./styles/base.css";
 import "./styles/shell.css";
 import App from "./App";
 import { Countdown } from "./components/Countdown";
+import { FloatingControl } from "./components/FloatingControl";
 import { PatternSetup, PatternWindow } from "./components/PatternWindow";
 import { RegionOverlay, RegionSetup } from "./components/RegionOverlay";
 import "./styles/tests.css";
@@ -18,6 +19,8 @@ declare global {
     __KREOKIT_PATTERN__?: PatternSetup;
     /** Set in the countdown's window only (start_recording in lib.rs). */
     __KREOKIT_COUNTDOWN__?: boolean;
+    /** Set in the floating control's window only (control_open in lib.rs). */
+    __KREOKIT_CONTROL__?: boolean;
   }
 }
 
@@ -30,6 +33,8 @@ const pattern = window.__KREOKIT_PATTERN__;
 if (pattern) document.documentElement.classList.add("pattern-window-root");
 const countdown = window.__KREOKIT_COUNTDOWN__;
 if (countdown) document.documentElement.classList.add("countdown-window");
+const control = window.__KREOKIT_CONTROL__;
+if (control) document.documentElement.classList.add("control-window");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -39,6 +44,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <RegionOverlay setup={region} />
     ) : countdown ? (
       <Countdown />
+    ) : control ? (
+      <FloatingControl />
     ) : (
       <App />
     )}

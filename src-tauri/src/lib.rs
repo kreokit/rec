@@ -12,6 +12,7 @@ mod ffmpeg;
 #[cfg(feature = "bench")]
 mod fieldtest;
 mod finish;
+mod floating;
 /// Releases have no Tests screen: its commands only answer that.
 #[cfg(not(feature = "bench"))]
 mod fieldtest {
@@ -347,19 +348,7 @@ fn window_support() -> (bool, Option<String>) {
 async fn devices() -> Result<Devices, String> {
     if synthetic().is_some() {
         return Ok(Devices {
-            displays: vec![Display {
-                id: 0,
-                name: "Test display".into(),
-                width: 1920,
-                height: 1200,
-                main: true,
-                // Small and away from the corner: a test instance's region overlay covers
-                // only this part of the real screen.
-                x: 240.0,
-                y: 160.0,
-                points_width: 960.0,
-                points_height: 600.0,
-            }],
+            displays: vec![synthetic_display()],
             mics: vec![Mic {
                 id: "synthetic".into(),
                 name: "Test microphone".into(),
@@ -400,6 +389,30 @@ async fn devices() -> Result<Devices, String> {
         })
     })
     .await
+}
+
+/// The made-up display of synthetic test runs: small and away from the corner, so a test
+/// instance's region overlay covers only this part of the real screen.
+fn synthetic_display() -> Display {
+    Display {
+        id: 0,
+        name: "Test display".into(),
+        width: 1920,
+        height: 1200,
+        main: true,
+        x: 240.0,
+        y: 160.0,
+        points_width: 960.0,
+        points_height: 600.0,
+    }
+}
+
+fn display_list() -> Vec<Display> {
+    if synthetic().is_some() {
+        vec![synthetic_display()]
+    } else {
+        native::displays()
+    }
 }
 
 /// The windows that can be recorded now (asked each time the window choice opens).
@@ -693,6 +706,126 @@ fn countdown_open(
     Ok(())
 }
 
+/// The display the floating control is on while recording.
+static CONTROL_ON: std::sync::Mutex<Option<Display>> = std::sync::Mutex::new(None);
+
+/// Opens the floating control (time, pause, stop, mic level) where `floating.rs` says;
+/// false when it would be recorded (the menu bar or tray take its place).
+fn control_open(app: &AppHandle, options: &Options) -> Result<bool, String> {
+    control_close(app);
+    let displays = display_list();
+    let kept_out = synthetic().is_some() || native::exclusion_supported();
+    let Some(display) = floating::control_display(
+        &displays,
+        options.display_id,
+        options.window.is_some(),
+        kept_out,
+    ) else {
+        return Ok(false);
+    };
+    let saved = read_prefs(app)
+        .control_positions
+        .get(&display.id.to_string())
+        .copied();
+    let (x, y) = floating::control_position(display, saved);
+    let (w, h) = floating::CONTROL_SIZE;
+    let window = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("index.html".into()))
+        .title("KreoKit Rec")
+        .initialization_script("window.__KREOKIT_CONTROL__ = true;")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .always_on_top(true)
+        .visible_on_all_workspaces(true)
+        .skip_taskbar(true)
+        // Clicking it must not take the keyboard from the app being recorded.
+        .focusable(false)
+        .focused(false)
+        .accept_first_mouse(true)
+        .visible(false)
+        .position(x, y)
+        .inner_size(w, h)
+        .build()
+        .map_err(|e| format!("The recording controls can't open ({e}). Try again."))?;
+    #[cfg(target_os = "macos")]
+    {
+        let ns_window = window.ns_window().map_err(|e| e.to_string())? as usize;
+        window
+            .run_on_main_thread(move || native::floating_window(ns_window as *mut _))
+            .map_err(|e| e.to_string())?;
+    }
+    window.show().map_err(|e| e.to_string())?;
+    *CONTROL_ON.lock().unwrap() = Some(display.clone());
+    Ok(true)
+}
+
+/// Moves the floating control by (dx, dy) points (dragged by its background: the panel
+/// never becomes the key window, so the system's own window drag doesn't start).
+#[tauri::command]
+fn control_move(app: AppHandle, dx: f64, dy: f64) -> Result<(), String> {
+    let window = app
+        .get_webview_window("control")
+        .ok_or("The recording controls are closed.")?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let at = window
+        .outer_position()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale);
+    window
+        .set_position(tauri::LogicalPosition::new(at.x + dx, at.y + dy))
+        .map_err(|e| e.to_string())
+}
+
+/// Closes the floating control and remembers where it was left on its display.
+fn control_close(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("control") else {
+        return;
+    };
+    let display = CONTROL_ON.lock().unwrap().take();
+    if let (Some(display), Ok(at), Ok(scale)) =
+        (display, window.outer_position(), window.scale_factor())
+    {
+        let at = at.to_logical::<f64>(scale);
+        let _ = write_prefs(
+            app,
+            |p| {
+                p.control_positions
+                    .insert(display.id.to_string(), (at.x - display.x, at.y - display.y));
+            },
+            "Where the recording controls were left couldn't be remembered",
+        );
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(ns_window) = window.ns_window() {
+        // Back to the window library's own class before it closes the window.
+        let ns_window = ns_window as usize;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = app.run_on_main_thread(move || {
+            native::floating_window_release(ns_window as *mut _);
+            let _ = tx.send(());
+        });
+        let _ = rx.recv_timeout(std::time::Duration::from_secs(2));
+    }
+    let _ = window.destroy();
+}
+
+/// The main window steps aside while the floating control is shown...
+fn main_window_aside(app: &AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.minimize();
+    }
+}
+
+/// ...and comes back when the recording ends.
+fn main_window_back(app: &AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+}
+
 fn countdown_close(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("countdown") {
         let _ = window.destroy();
@@ -711,6 +844,15 @@ async fn start_recording(
     if options.countdown {
         let display = display.ok_or("Choose a display, then record again.")?;
         countdown_open(&app, &display, options.region)?;
+    }
+    let control = match control_open(&app, &options) {
+        Ok(shown) => shown,
+        Err(e) => {
+            countdown_close(&app);
+            return Err(e);
+        }
+    };
+    if options.countdown || control {
         // On screen before the recorder looks at which of the app's windows are shown.
         wait_ms(std::time::Duration::from_millis(150)).await;
     }
@@ -728,12 +870,16 @@ async fn start_recording(
     if started.is_ok() && options_countdown && app.get_webview_window("countdown").is_none() {
         let app2 = app.clone();
         let _ = blocking(move || recordings(&app2).cancel()).await;
+        control_close(&app);
         own_windows(&app, false);
         return Err(COUNTDOWN_CANCELLED.into());
     }
     if started.is_err() {
         countdown_close(&app);
+        control_close(&app);
         own_windows(&app, false);
+    } else if control {
+        main_window_aside(&app);
     }
     started
 }
@@ -770,6 +916,8 @@ async fn countdown_cancel(app: AppHandle) -> Result<(), String> {
         }
     })
     .await;
+    control_close(&app);
+    main_window_back(&app);
     let _ = app.emit_to("main", "recording-cancelled", ());
     cancelled
 }
@@ -791,12 +939,22 @@ async fn live_status(app: AppHandle) -> Result<Option<Live>, String> {
 
 #[tauri::command]
 async fn stop_recording(app: AppHandle) -> Result<Session, String> {
-    blocking(move || {
-        let stopped = recordings(&app).stop();
-        own_windows(&app, false);
-        stopped
+    let stopped = blocking({
+        let app = app.clone();
+        move || {
+            let stopped = recordings(&app).stop();
+            own_windows(&app, false);
+            stopped
+        }
     })
-    .await
+    .await;
+    control_close(&app);
+    main_window_back(&app);
+    // The stop may come from the floating control: the main window opens Finish.
+    if let Ok(session) = &stopped {
+        let _ = app.emit_to("main", "recording-stopped", session);
+    }
+    stopped
 }
 
 #[tauri::command]
@@ -947,6 +1105,9 @@ struct Prefs {
     /// Count 3-2-1 before recording (on when not set).
     #[serde(default)]
     countdown: Option<bool>,
+    /// Where the floating control was left, per display id: points from its top-left.
+    #[serde(default)]
+    control_positions: std::collections::HashMap<String, (f64, f64)>,
 }
 
 fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1247,6 +1408,7 @@ pub fn run() {
             start_recording,
             countdown_done,
             countdown_cancel,
+            control_move,
             countdown_pref,
             set_countdown_pref,
             pause_recording,

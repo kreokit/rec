@@ -348,6 +348,8 @@ export const api = {
   /** Esc during the countdown: nothing is kept ("recording-cancelled" goes to the main window). */
   countdownCancel: () => invoke<void>("countdown_cancel"),
   countdownPref: () => invoke<boolean>("countdown_pref"),
+  /** Moves the floating control by (dx, dy) points (it is dragged by hand, see FloatingControl). */
+  controlMove: (dx: number, dy: number) => invoke<void>("control_move", { dx, dy }),
   setCountdownPref: (on: boolean) => invoke<void>("set_countdown_pref", { on }),
   pauseRecording: () => invoke<Session>("pause_recording"),
   resumeRecording: () => invoke<Session>("resume_recording"),

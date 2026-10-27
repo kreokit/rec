@@ -1,0 +1,127 @@
+import { useEffect, useRef, useState } from "react";
+import { Pause, Play, Square, X } from "lucide-react";
+import { Live, api } from "../lib/api";
+import { formatDuration } from "../lib/format";
+import { ICON_STROKE, toast } from "../ui";
+import { LevelMeter } from "./LevelMeter";
+import "../styles/control.css";
+
+/**
+ * The floating control while recording (its own window, `control_open` in lib.rs): time,
+ * microphone level, pause/resume and stop. It never takes the keyboard from the app being
+ * recorded, and it is kept out of the recording (or shown only where it isn't recorded).
+ * Drag it by its background; where it was left is remembered per display.
+ */
+export function FloatingControl() {
+  const [live, setLive] = useState<Live | null>(null);
+  const [stopping, setStopping] = useState(false);
+
+  useEffect(() => {
+    const poll = () => void api.liveStatus().then(setLive, () => {});
+    poll();
+    const timer = window.setInterval(poll, 250);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const session = live?.session;
+  const counting = session?.state === "countdown";
+  const paused = session?.state === "paused";
+  const stuck = !!session?.error;
+
+  const run = (action: () => Promise<unknown>) => () =>
+    void action().catch((e) => {
+      toast(String(e), "error");
+      setStopping(false);
+    });
+
+  // Dragged by its background: the window moves by how far the pointer went on screen.
+  const drag = useRef<{ x: number; y: number } | null>(null);
+  const pending = useRef({ dx: 0, dy: 0, queued: false });
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0 || (e.target as Element).closest("button")) return;
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    drag.current = { x: e.screenX, y: e.screenY };
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const from = drag.current;
+    if (!from) return;
+    const p = pending.current;
+    p.dx += e.screenX - from.x;
+    p.dy += e.screenY - from.y;
+    drag.current = { x: e.screenX, y: e.screenY };
+    if (p.queued) return;
+    p.queued = true;
+    requestAnimationFrame(() => {
+      const { dx, dy } = p;
+      Object.assign(p, { dx: 0, dy: 0, queued: false });
+      if (dx || dy) void api.controlMove(dx, dy);
+    });
+  };
+  const onPointerUp = () => {
+    drag.current = null;
+  };
+
+  const stop = run(async () => {
+    setStopping(true);
+    // The main window opens Finish; this window closes.
+    await api.stopRecording();
+  });
+
+  return (
+    <div
+      className="control"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    >
+      <span className={paused || counting ? "control-dot paused" : "control-dot"} aria-hidden />
+      <span className="control-time">
+        {stopping ? "Finishing…" : counting ? "Starting…" : formatDuration(live?.status.elapsed ?? 0)}
+      </span>
+      {session?.mic && (
+        <div className="control-level">
+          <LevelMeter peak={live?.status.mic_peak ?? 0} off={paused || counting} />
+        </div>
+      )}
+      {counting ? (
+        <button
+          type="button"
+          className="ui-icon-button ui-button-secondary control-button"
+          aria-label="Cancel"
+          title="Cancel"
+          onClick={run(() => api.countdownCancel())}
+        >
+          <X size={16} strokeWidth={ICON_STROKE} aria-hidden />
+        </button>
+      ) : (
+        <>
+          <button
+            type="button"
+            className="ui-icon-button ui-button-secondary control-button"
+            aria-label={paused ? "Resume" : "Pause"}
+            title={paused ? "Resume" : "Pause"}
+            disabled={stopping || stuck || !session}
+            onClick={run(() => (paused ? api.resumeRecording() : api.pauseRecording()))}
+          >
+            {paused ? (
+              <Play size={16} strokeWidth={ICON_STROKE} aria-hidden />
+            ) : (
+              <Pause size={16} strokeWidth={ICON_STROKE} aria-hidden />
+            )}
+          </button>
+          <button
+            type="button"
+            className="ui-icon-button ui-button-primary control-button"
+            aria-label="Stop"
+            title="Stop"
+            disabled={stopping || !session}
+            onClick={stop}
+          >
+            <Square size={16} strokeWidth={ICON_STROKE} aria-hidden />
+          </button>
+        </>
+      )}
+    </div>
+  );
+}

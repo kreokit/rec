@@ -44,6 +44,16 @@ export function Recording({
     return () => void stop.then((f) => f());
   }, [onCancelled]);
 
+  // Stopped from the floating control.
+  useEffect(() => {
+    const stop = listen<Session>("recording-stopped", (e) => {
+      if (stoppingRef.current) return; // stopped here: `stop` hands it on
+      stoppingRef.current = true;
+      onDone(e.payload);
+    });
+    return () => void stop.then((f) => f());
+  }, [onDone]);
+
   const current = live?.session ?? session;
   const counting = current.state === "countdown";
   const paused = current.state === "paused";

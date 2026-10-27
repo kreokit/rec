@@ -107,6 +107,11 @@ int kr_window_capture_supported(void);
 void kr_overlay_window(void *ns_window);
 // Its CGWindowID (the test version records its own pattern window). Main thread only.
 uint32_t kr_window_number(void *ns_window);
+// The floating control and camera bubble: above normal windows, over full-screen apps, on
+// every Space. Main thread only.
+void kr_floating_window(void *ns_window);
+// Before a floating window closes: back to its own class. Main thread only.
+void kr_floating_window_release(void *ns_window);
 
 // Permissions: 1 allowed, 0 not (yet) allowed.
 int kr_screen_access(void);
