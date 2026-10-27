@@ -122,7 +122,9 @@ pub fn read_frames(video: &Path, g: &Geometry) -> Result<Vec<Frame>, String> {
         .filter_map(|s| s.trim_end_matches(',').parse().ok())
         .collect();
     pts.sort_by(f64::total_cmp);
-    let width = (g.cell * 34.0).round() as u32;
+    // 33 squares: the last bit is read 32 squares in. (A 34th would pass the edge of a window
+    // recording rounded down to even pixels, e.g. 450.5 points at 2x into 900 pixels.)
+    let width = (g.cell * 33.0).round() as u32;
     let bits = rows(
         video,
         g.x.round() as u32,

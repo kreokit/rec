@@ -216,7 +216,8 @@ struct Devices {
 }
 
 /// Window capture on macOS 12 (ScreenCaptureKit, 12.3+): whether it's reliable enough to
-/// offer, decided by the measurement in docs/m3-results.md.
+/// offer. Measured on the dev Mac (12.7.6, 2026-10-27, docs/m3-results.md): 100 % and
+/// 99.38 % fresh frames, above the 99 % target; set to false if a later measurement fails.
 const WINDOWS_ON_MACOS_12: bool = true;
 
 fn window_support() -> (bool, Option<String>) {
