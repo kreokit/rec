@@ -9,6 +9,8 @@
 #include "recorder.h"
 
 #import <AVFoundation/AVFoundation.h>
+#import <CoreImage/CoreImage.h>
+#import <ImageIO/ImageIO.h>
 #import <CoreGraphics/CoreGraphics.h>
 #import <CoreMedia/CoreMedia.h>
 #import <CoreVideo/CoreVideo.h>
@@ -1200,4 +1202,129 @@ void kr_mic_monitor_stop(void) {
     gMonitor = nil;
     pthread_mutex_unlock(&gMonitorLock);
     if (m) [m->session stopRunning];
+}
+
+#pragma mark - Camera preview
+
+@interface KRPreview : NSObject <AVCaptureVideoDataOutputSampleBufferDelegate> {
+  @public
+    AVCaptureSession *session;
+    dispatch_queue_t queue;
+    dispatch_source_t synthTimer;
+    CVPixelBufferPoolRef synthPool;
+    CIContext *context;
+    int64_t count;
+    NSData *jpeg; // the newest picture, under gPreviewLock
+    uint64_t seq;
+}
+@end
+
+static pthread_mutex_t gPreviewLock = PTHREAD_MUTEX_INITIALIZER;
+static KRPreview *gPreview;
+
+@implementation KRPreview
+- (void)take:(CVPixelBufferRef)pb {
+    static CGColorSpaceRef srgb;
+    if (!srgb) srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CIImage *image = [CIImage imageWithCVPixelBuffer:pb];
+    NSData *data = [context JPEGRepresentationOfImage:image colorSpace:srgb options:@{(id)kCGImageDestinationLossyCompressionQuality : @0.7}];
+    if (!data) return;
+    pthread_mutex_lock(&gPreviewLock);
+    jpeg = data;
+    seq++;
+    pthread_mutex_unlock(&gPreviewLock);
+}
+
+- (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sb fromConnection:(AVCaptureConnection *)connection {
+    // Every other picture: about 15 a second is enough to see yourself.
+    if (count++ % 2) return;
+    CVPixelBufferRef pb = CMSampleBufferGetImageBuffer(sb);
+    if (pb) [self take:pb];
+}
+
+- (void)dealloc {
+    if (synthPool) CVPixelBufferPoolRelease(synthPool);
+}
+@end
+
+int kr_camera_preview_start(const char *camera_id, int width, int height, int synthetic, char *error, size_t error_len) {
+    kr_camera_preview_stop();
+    @autoreleasepool {
+        KRPreview *p = [KRPreview new];
+        p->queue = dispatch_queue_create("kreokit.rec.preview", DISPATCH_QUEUE_SERIAL);
+        p->context = [CIContext contextWithOptions:nil];
+        NSDictionary *attrs = @{
+            (id)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+            (id)kCVPixelBufferWidthKey : @(width),
+            (id)kCVPixelBufferHeightKey : @(height),
+        };
+        if (synthetic) {
+            NSMutableDictionary *pool = [attrs mutableCopy];
+            pool[(id)kCVPixelBufferIOSurfacePropertiesKey] = @{};
+            CVPixelBufferPoolCreate(NULL, NULL, (__bridge CFDictionaryRef)pool, &p->synthPool);
+            p->synthTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, p->queue);
+            dispatch_source_set_timer(p->synthTimer, dispatch_time(DISPATCH_TIME_NOW, 0), NSEC_PER_SEC / 15, NSEC_PER_SEC / 100);
+            __weak KRPreview *weak = p;
+            dispatch_source_set_event_handler(p->synthTimer, ^{
+                KRPreview *me = weak;
+                CVPixelBufferRef pb = NULL;
+                if (!me || CVPixelBufferPoolCreatePixelBuffer(NULL, me->synthPool, &pb) != kCVReturnSuccess) return;
+                int64_t n = me->count++;
+                drawPattern(pb, n, n % 15 == 0);
+                [me take:pb];
+                CVPixelBufferRelease(pb);
+            });
+            dispatch_resume(p->synthTimer);
+        } else {
+            AVCaptureDevice *dev = cameraDevice(camera_id);
+            NSError *e = nil;
+            AVCaptureDeviceInput *input = dev ? [AVCaptureDeviceInput deviceInputWithDevice:dev error:&e] : nil;
+            if (!input) {
+                setError(error, error_len, dev ? [NSString stringWithFormat:@"The camera can't be opened (%@). Check that KreoKit Rec may use it in System Preferences > Security & Privacy > Privacy > Camera, and that no other app is using it.", e.localizedDescription]
+                                               : @"No camera found. Connect one, or record without the camera.");
+                return -1;
+            }
+            p->session = [AVCaptureSession new];
+            [p->session beginConfiguration];
+            [p->session addInput:input];
+            AVCaptureVideoDataOutput *out = [AVCaptureVideoDataOutput new];
+            out.videoSettings = attrs;
+            [out setSampleBufferDelegate:p queue:p->queue];
+            [p->session addOutput:out];
+            [p->session commitConfiguration];
+            [p->session startRunning];
+            if (!p->session.running) {
+                setError(error, error_len, @"The camera didn't start. Check that no other app is using it, then choose it again.");
+                return -1;
+            }
+        }
+        pthread_mutex_lock(&gPreviewLock);
+        gPreview = p;
+        pthread_mutex_unlock(&gPreviewLock);
+        return 0;
+    }
+}
+
+size_t kr_camera_preview_frame(uint64_t *seq, char **jpeg) {
+    *jpeg = NULL;
+    pthread_mutex_lock(&gPreviewLock);
+    NSData *data = gPreview && gPreview->seq > *seq ? gPreview->jpeg : nil;
+    if (data) *seq = gPreview->seq;
+    pthread_mutex_unlock(&gPreviewLock);
+    if (!data.length) return 0;
+    *jpeg = malloc(data.length);
+    memcpy(*jpeg, data.bytes, data.length);
+    return data.length;
+}
+
+void kr_camera_preview_stop(void) {
+    pthread_mutex_lock(&gPreviewLock);
+    KRPreview *p = gPreview;
+    gPreview = nil;
+    pthread_mutex_unlock(&gPreviewLock);
+    if (!p) return;
+    if (p->synthTimer) dispatch_source_cancel(p->synthTimer);
+    [p->session stopRunning];
+    // Waits for a picture still being made.
+    dispatch_sync(p->queue, ^{});
 }

@@ -3,6 +3,7 @@ import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Trash2, TriangleAlert, Vid
 import { Camera, Display, Estimate, Mic as MicDevice, Options, Session, api } from "../lib/api";
 import { checkSummary, clockTime, formatBytes, formatDuration, formatRoom, recordingTitle } from "../lib/format";
 import { Button, Field, ICON_STROKE, Menu, MenuEntry, Segmented, Select, toast, useContextMenu } from "../ui";
+import { CameraPreview } from "./CameraPreview";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { LevelMeter, useMonitorPeak } from "./LevelMeter";
 import { TopBar } from "./TopBar";
@@ -210,6 +211,9 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
                 onChange={(id) => void chooseCamera(id)}
                 options={cameraOptions}
               />
+            </Field>
+            <Field label="Preview">
+              <CameraPreview camera={camera} />
             </Field>
           </div>
           <div className="setup-footer">

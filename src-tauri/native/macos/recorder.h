@@ -94,4 +94,13 @@ int kr_mic_monitor_start(const char *mic_id, char *error, size_t error_len);
 float kr_mic_monitor_peak(void); // peak of the last 100 ms, 0..1
 void kr_mic_monitor_stop(void);
 
+// The camera preview on the setup screen: small JPEG pictures (`width` wide, the camera's
+// shape) about 15 times a second, without recording. synthetic: the test pattern instead of
+// a camera.
+int kr_camera_preview_start(const char *camera_id, int width, int height, int synthetic, char *error, size_t error_len);
+// The newest picture if it is newer than *seq (then *seq is updated): its length, the bytes in
+// *jpeg (free with kr_free). 0 when there is nothing new.
+size_t kr_camera_preview_frame(uint64_t *seq, char **jpeg);
+void kr_camera_preview_stop(void);
+
 #endif

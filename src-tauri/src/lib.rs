@@ -306,10 +306,51 @@ async fn monitor_stop() -> Result<(), String> {
     .await
 }
 
+/// The camera preview on Home: 320 pixels wide in the camera's shape (`width` × `height`).
+#[tauri::command]
+async fn camera_preview_start(camera_id: String, width: u32, height: u32) -> Result<(), String> {
+    let (w, h) = preview_size(width, height);
+    let synthetic = synthetic().is_some();
+    blocking(move || native::preview_start(&camera_id, w, h, synthetic)).await
+}
+
+fn preview_size(width: u32, height: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (320, 180);
+    }
+    (
+        320,
+        ((320.0 * height as f64 / width as f64).round() as u32 & !1).max(2),
+    )
+}
+
+/// The newest preview picture if newer than `after`: its number (8 bytes, little-endian)
+/// followed by the JPEG; nothing when there is no new picture.
+#[tauri::command]
+fn camera_preview_frame(after: u64) -> tauri::ipc::Response {
+    let mut seq = after;
+    let mut out = Vec::new();
+    if let Some(jpeg) = native::preview_frame(&mut seq) {
+        out.extend_from_slice(&seq.to_le_bytes());
+        out.extend_from_slice(&jpeg);
+    }
+    tauri::ipc::Response::new(out)
+}
+
+#[tauri::command]
+async fn camera_preview_stop() -> Result<(), String> {
+    blocking(|| {
+        native::preview_stop();
+        Ok(())
+    })
+    .await
+}
+
 #[tauri::command]
 async fn start_recording(app: AppHandle, options: Options) -> Result<Session, String> {
     blocking(move || {
         native::monitor_stop();
+        native::preview_stop();
         recordings(&app).start(&options)
     })
     .await
@@ -423,6 +464,9 @@ pub fn run() {
             monitor_start,
             monitor_level,
             monitor_stop,
+            camera_preview_start,
+            camera_preview_frame,
+            camera_preview_stop,
             start_recording,
             pause_recording,
             resume_recording,
@@ -471,5 +515,12 @@ mod tests {
                 env!("CARGO_PKG_VERSION")
             )
         );
+    }
+
+    #[test]
+    fn preview_keeps_the_camera_shape() {
+        assert_eq!(super::preview_size(1280, 720), (320, 180));
+        assert_eq!(super::preview_size(640, 480), (320, 240));
+        assert_eq!(super::preview_size(0, 0), (320, 180));
     }
 }

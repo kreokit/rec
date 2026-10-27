@@ -196,6 +196,16 @@ mod macos {
         fn kr_mic_monitor_start(mic_id: *const c_char, error: *mut c_char, len: usize) -> c_int;
         fn kr_mic_monitor_peak() -> f32;
         fn kr_mic_monitor_stop();
+        fn kr_camera_preview_start(
+            camera_id: *const c_char,
+            width: c_int,
+            height: c_int,
+            synthetic: c_int,
+            error: *mut c_char,
+            len: usize,
+        ) -> c_int;
+        fn kr_camera_preview_frame(seq: *mut u64, jpeg: *mut *mut c_char) -> usize;
+        fn kr_camera_preview_stop();
     }
 
     impl From<KrRecStatus> for Status {
@@ -394,6 +404,47 @@ mod macos {
     pub fn monitor_stop() {
         unsafe { kr_mic_monitor_stop() }
     }
+
+    /// Starts the camera preview: small JPEG pictures `width` × `height`, ~15 a second.
+    pub fn preview_start(
+        camera_id: &str,
+        width: u32,
+        height: u32,
+        synthetic: bool,
+    ) -> Result<(), String> {
+        let id = CString::new(camera_id).map_err(|e| e.to_string())?;
+        let mut error = [0u8; 1024];
+        let result = unsafe {
+            kr_camera_preview_start(
+                id.as_ptr(),
+                width as c_int,
+                height as c_int,
+                synthetic as c_int,
+                error.as_mut_ptr().cast(),
+                error.len(),
+            )
+        };
+        match result {
+            0 => Ok(()),
+            _ => Err(message(&error)),
+        }
+    }
+
+    /// The newest preview picture if newer than `seq` (which is then updated).
+    pub fn preview_frame(seq: &mut u64) -> Option<Vec<u8>> {
+        let mut jpeg: *mut c_char = std::ptr::null_mut();
+        let len = unsafe { kr_camera_preview_frame(seq, &mut jpeg) };
+        if len == 0 || jpeg.is_null() {
+            return None;
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(jpeg.cast::<u8>(), len) }.to_vec();
+        unsafe { kr_free(jpeg) };
+        Some(bytes)
+    }
+
+    pub fn preview_stop() {
+        unsafe { kr_camera_preview_stop() }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -454,6 +505,13 @@ mod other {
         0.0
     }
     pub fn monitor_stop() {}
+    pub fn preview_start(_id: &str, _w: u32, _h: u32, _synthetic: bool) -> Result<(), String> {
+        Err(NOT_YET.into())
+    }
+    pub fn preview_frame(_seq: &mut u64) -> Option<Vec<u8>> {
+        None
+    }
+    pub fn preview_stop() {}
 }
 
 #[cfg(all(test, target_os = "macos"))]
@@ -570,6 +628,27 @@ mod tests {
                 .all(|c| c.width > 0 && c.height > 0 && c.height <= 720 && !c.id.is_empty())
         );
         assert!(cameras.iter().filter(|c| c.default).count() <= 1);
+    }
+
+    #[test]
+    fn previews_the_synthetic_camera() {
+        preview_start("", 320, 180, true).unwrap();
+        let mut seq = 0;
+        let start = std::time::Instant::now();
+        let mut pictures = 0;
+        while start.elapsed().as_millis() < 1000 {
+            if let Some(jpeg) = preview_frame(&mut seq) {
+                assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
+                pictures += 1;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Nothing new without a new picture.
+        let before = seq;
+        preview_stop();
+        assert_eq!(preview_frame(&mut seq), None);
+        assert_eq!(seq, before);
+        assert!((10..=17).contains(&pictures), "{pictures} pictures in 1 s");
     }
 
     #[test]

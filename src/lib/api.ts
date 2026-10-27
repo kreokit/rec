@@ -133,6 +133,11 @@ export const api = {
   monitorStart: (micId: string) => invoke<void>("monitor_start", { micId }),
   monitorLevel: () => invoke<number>("monitor_level"),
   monitorStop: () => invoke<void>("monitor_stop"),
+  cameraPreviewStart: (cameraId: string, width: number, height: number) =>
+    invoke<void>("camera_preview_start", { cameraId, width, height }),
+  /** The newest picture after `after`: its number (8 bytes, little-endian) + JPEG; empty if none. */
+  cameraPreviewFrame: (after: number) => invoke<ArrayBuffer>("camera_preview_frame", { after }),
+  cameraPreviewStop: () => invoke<void>("camera_preview_stop"),
   startRecording: (options: Options) => invoke<Session>("start_recording", { options }),
   pauseRecording: () => invoke<Session>("pause_recording"),
   resumeRecording: () => invoke<Session>("resume_recording"),

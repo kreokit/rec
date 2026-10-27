@@ -70,6 +70,7 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
         </div>
         <div className="rec-meta">
           {current.screen?.display} · {current.screen?.width} × {current.screen?.height}
+          {current.camera ? ` · ${current.camera.name}` : ""}
           {current.mic ? ` · ${current.mic}` : " · No microphone"}
         </div>
         {current.mic && (

@@ -30,7 +30,9 @@ fn build_macos_recorder() {
         "CoreMedia",
         "CoreVideo",
         "CoreAudio",
+        "CoreImage",
         "Foundation",
+        "ImageIO",
         "IOSurface",
     ] {
         println!("cargo:rustc-link-lib=framework={framework}");
