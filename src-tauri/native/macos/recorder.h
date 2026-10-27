@@ -38,11 +38,12 @@ typedef struct {
     // the camera, a click every second on the mic, see recorder.m). synthetic_fast runs them as fast as
     // the encoder allows on their own clock (a simulated hour in minutes);
     // synthetic_static freezes the picture for 2 s of every 10 s (nothing changes on screen);
-    // synthetic_late_camera sends the camera's first picture 1 s after the start, as a real one.
+    // synthetic_late_start sends the camera's first picture 1 s and the mic's first sound
+    // 0.4 s after the start, as real devices do.
     int synthetic;
     int synthetic_fast;
     int synthetic_static;
-    int synthetic_late_camera;
+    int synthetic_late_start;
 } KrRecConfig;
 
 typedef struct {

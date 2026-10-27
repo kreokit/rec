@@ -30,8 +30,10 @@ static const double kQueueSeconds = 1.0;
 // A frame exactly on a slot boundary belongs to the next slot (synthetic frames land
 // exactly there; without a margin, rounding would decide).
 static const double kTie = 1e-6;
-// When the made-up camera's first picture comes, after the start (the dev Mac's camera: 0.9 s).
+// With synthetic_late_start, when the made-up camera's first picture and mic's first sound
+// come after the start (the dev Mac's camera: 0.9 s, its mic: 0.35 s, measured 2026-10-27).
 static const double kCameraWarmUp = 1.0;
+static const double kMicWarmUp = 0.4;
 // A small gap or overlap in the microphone's timestamps (jitter) is ignored up to this.
 static const int64_t kAudioTolerance = 96; // 2 ms
 
@@ -528,7 +530,8 @@ API_AVAILABLE(macos(12.3))
         int64_t skip = 0;
         if (pos > audioNext + kAudioTolerance) {
             int64_t gap = pos - audioNext;
-            st.audio_filled += gap;
+            // Before the first sound it's the mic starting up, not a gap to report.
+            if (audioNext > 0) st.audio_filled += gap;
             while (gap > 0) {
                 int64_t part = MIN(gap, kRate / 10);
                 [self writeAudio:NULL count:part];
@@ -616,7 +619,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
                 double frac = ts - floor(ts);
                 audio[k] = (ts >= 0 && frac < 0.005) ? 0.5f : 0.0f;
             }
-            [self audio:audio count:chunk at:t];
+            if (!self->cfg.synthetic_late_start || t >= self->t0 + kMicWarmUp) [self audio:audio count:chunk at:t];
             if (self->screenW && !frozen) {
                 CVPixelBufferRef pb = NULL;
                 CVPixelBufferPoolCreatePixelBuffer(NULL, self->synthPool, &pb);
@@ -626,7 +629,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
                     CVPixelBufferRelease(pb);
                 }
             }
-            if (self->cameraW && i % (cfps / self->cfg.fps) == 0 && (!self->cfg.synthetic_late_camera || t >= self->t0 + kCameraWarmUp)) {
+            if (self->cameraW && i % (cfps / self->cfg.fps) == 0 && (!self->cfg.synthetic_late_start || t >= self->t0 + kCameraWarmUp)) {
                 int64_t c = llround((t - self->t0) * self->cfg.fps);
                 CVPixelBufferRef pb = NULL;
                 CVPixelBufferPoolCreatePixelBuffer(NULL, self->synthCameraPool, &pb);

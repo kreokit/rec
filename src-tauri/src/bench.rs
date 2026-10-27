@@ -358,7 +358,7 @@ mod tests {
             synthetic: Some(Synthetic {
                 fast: true,
                 still_periods: true,
-                late_camera: false,
+                late_start: false,
             }),
         })
         .unwrap();

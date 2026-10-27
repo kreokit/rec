@@ -48,9 +48,10 @@ pub struct Synthetic {
     pub fast: bool,
     /// The picture stands still for 2 s of every 10 s.
     pub still_periods: bool,
-    /// The camera's first picture comes 1 s after the start, as with a real camera.
+    /// The camera's first picture comes 1 s and the mic's first sound 0.4 s after the
+    /// start, as with real devices.
     #[serde(default)]
-    pub late_camera: bool,
+    pub late_start: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -176,7 +177,7 @@ mod macos {
         synthetic: c_int,
         synthetic_fast: c_int,
         synthetic_static: c_int,
-        synthetic_late_camera: c_int,
+        synthetic_late_start: c_int,
     }
 
     #[repr(C)]
@@ -316,7 +317,7 @@ mod macos {
                 synthetic: config.synthetic.is_some() as c_int,
                 synthetic_fast: synthetic.fast as c_int,
                 synthetic_static: synthetic.still_periods as c_int,
-                synthetic_late_camera: synthetic.late_camera as c_int,
+                synthetic_late_start: synthetic.late_start as c_int,
             };
             let mut error = [0u8; 1024];
             let rec = unsafe { kr_rec_start(&raw, error.as_mut_ptr().cast(), error.len()) };
@@ -608,7 +609,7 @@ pub(crate) mod tests {
             synthetic: Some(Synthetic {
                 fast: true,
                 still_periods: still,
-                late_camera: false,
+                late_start: false,
             }),
         }
     }
@@ -819,15 +820,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_late_camera_fills_the_start_with_its_first_picture() {
+    fn devices_starting_late_fill_the_start() {
         let _timing = alongside();
         // A real camera's first picture comes ~0.9 s after the start: the slots before it
-        // show it, then every slot gets its own picture, and the camera keeps the screen's length.
-        let dir = temp_dir("late-camera");
+        // show it, then every slot gets its own picture, and the camera keeps the screen's
+        // length. The mic's first sound comes ~0.35 s after the start: silence before it,
+        // not reported as a gap.
+        let dir = temp_dir("late-start");
         let mut config = synthetic(dir.clone(), 640, 360, false);
         config.synthetic = Some(Synthetic {
             fast: true,
-            late_camera: true,
+            late_start: true,
             ..Synthetic::default()
         });
         let rec = Recorder::start(&config).unwrap();
@@ -841,8 +844,13 @@ pub(crate) mod tests {
             status.camera_frames - 30,
             "{status:?}"
         );
+        assert_eq!((status.audio_filled, status.audio_dropped), (0, 0));
+        let video = status.frames as f64 / 30.0;
+        let audio = status.audio_samples as f64 / 48_000.0;
+        assert!((video - audio).abs() <= 1.0 / 30.0, "{video} vs {audio}");
         let report = crate::check::check(&dir, Some(&status), 30);
         assert!(report.problems.is_empty(), "{report:?}");
+        assert!(report.notes.is_empty(), "{report:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
