@@ -7,6 +7,33 @@ mod check;
 mod disk;
 mod encoder;
 mod ffmpeg;
+#[cfg(feature = "bench")]
+mod fieldtest;
+/// Releases have no Tests screen: its commands only answer that.
+#[cfg(not(feature = "bench"))]
+mod fieldtest {
+    const ONLY: &str = "The tests are only in the test version of KreoKit Rec.";
+    #[tauri::command]
+    pub fn fieldtest_pattern(mode: String) -> Result<(), String> {
+        let _ = mode;
+        Err(ONLY.into())
+    }
+    #[tauri::command]
+    pub fn fieldtest_pattern_close() {}
+    #[tauri::command]
+    pub fn fieldtest_info() -> Option<()> {
+        None
+    }
+    #[tauri::command]
+    pub fn fieldtest_run(test: String) -> Result<(), String> {
+        let _ = test;
+        Err(ONLY.into())
+    }
+    #[tauri::command]
+    pub fn fieldtest_save() -> Result<(), String> {
+        Err(ONLY.into())
+    }
+}
 mod jpeg;
 mod native;
 mod pipeline;
@@ -692,7 +719,12 @@ pub fn run() {
             pending_recoveries,
             recover_recording,
             quit_app,
-            report_problem
+            report_problem,
+            fieldtest::fieldtest_pattern,
+            fieldtest::fieldtest_pattern_close,
+            fieldtest::fieldtest_info,
+            fieldtest::fieldtest_run,
+            fieldtest::fieldtest_save
         ])
         .setup(|app| {
             // Linux keeps the screen portal's restore tokens there.

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Home } from "./components/Home";
 import { Permissions } from "./components/Permissions";
 import { Recording } from "./components/Recording";
+import { TestScreen } from "./components/TestScreen";
+import { setOpenTests } from "./components/TopBar";
 import { Permissions as PermissionState, Session, api } from "./lib/api";
 import { checkSummary, formatDuration } from "./lib/format";
 import { ToastRegion, toast } from "./ui";
@@ -10,7 +12,8 @@ type Screen =
   | { name: "loading" }
   | { name: "permissions"; permissions: PermissionState }
   | { name: "home"; micAllowed: boolean }
-  | { name: "recording"; session: Session };
+  | { name: "recording"; session: Session }
+  | { name: "tests" };
 
 /** The app: permissions first if needed, then Home ⇄ Recording. */
 function App() {
@@ -29,7 +32,16 @@ function App() {
       if (live) return setScreen({ name: "recording", session: live.session });
       const permissions = await api.permissions();
       const ready = permissions.screen === "allowed" && permissions.mic !== "not_asked";
-      setScreen(ready ? { name: "home", micAllowed: permissions.mic === "allowed" } : { name: "permissions", permissions });
+      // The test version opens on its Tests screen (once the permissions are given).
+      const tests = await api.fieldtestInfo().catch(() => null);
+      if (tests) setOpenTests(() => setScreen({ name: "tests" }));
+      setScreen(
+        !ready
+          ? { name: "permissions", permissions }
+          : tests
+            ? { name: "tests" }
+            : { name: "home", micAllowed: permissions.mic === "allowed" },
+      );
     })().catch((e) => {
       toast(String(e), "error");
       home();
@@ -52,6 +64,7 @@ function App() {
         <Home micAllowed={screen.micAllowed} onStart={(session) => setScreen({ name: "recording", session })} />
       )}
       {screen.name === "recording" && <Recording session={screen.session} onDone={finished} />}
+      {screen.name === "tests" && <TestScreen onApp={home} />}
       <ToastRegion />
     </>
   );

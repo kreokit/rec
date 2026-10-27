@@ -12,3 +12,10 @@ void kr_overlay_window(void *ns_window) {
     window.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary |
                                 NSWindowCollectionBehaviorStationary;
 }
+
+// The window's number (its CGWindowID), for recording one of the app's own windows (the
+// test version's pattern window).
+uint32_t kr_window_number(void *ns_window) {
+    NSWindow *window = (__bridge NSWindow *)ns_window;
+    return window ? (uint32_t)window.windowNumber : 0;
+}

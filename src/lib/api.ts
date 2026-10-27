@@ -196,6 +196,32 @@ export interface Options {
   system_audio: boolean;
 }
 
+/** The test version's tests (src-tauri/src/fieldtest.rs). */
+export type FieldTest = "screen" | "region" | "window" | "sync" | "camera" | "sound";
+
+export interface FieldTestInfo {
+  app: string;
+  os: Os;
+  os_version: string;
+  arch: string;
+  cpus: number;
+  displays: Display[];
+  mics: { name: string; default: boolean }[];
+  cameras: { name: string; width: number; height: number }[];
+  computer_sound: boolean;
+  windows: boolean;
+  encoder: string;
+}
+
+export interface FieldTestResult {
+  passed: boolean;
+  summary: string;
+  [numbers: string]: unknown;
+}
+
+/** Where the test window is (opaque to the screen; handed back to fieldtestRun). */
+export type FieldTestPlace = Record<string, number>;
+
 export const api = {
   permissions: () => invoke<Permissions>("permissions"),
   requestMic: () => invoke<Access>("request_mic"),
@@ -253,4 +279,11 @@ export const api = {
   showRecording: (id: string) => invoke<void>("show_recording", { id }),
   pendingRecoveries: () => invoke<Session[]>("pending_recoveries"),
   recoverRecording: (id: string) => invoke<Session>("recover_recording", { id }),
+  /** null in releases (no Tests screen). */
+  fieldtestInfo: () => invoke<FieldTestInfo | null>("fieldtest_info"),
+  fieldtestPattern: (mode: "pattern" | "sound" | "flash") => invoke<FieldTestPlace>("fieldtest_pattern", { mode }),
+  fieldtestPatternClose: () => invoke<void>("fieldtest_pattern_close"),
+  fieldtestRun: (test: FieldTest, place: FieldTestPlace | null) =>
+    invoke<FieldTestResult>("fieldtest_run", { test, place }),
+  fieldtestSave: (results: unknown) => invoke<string>("fieldtest_save", { results }),
 };

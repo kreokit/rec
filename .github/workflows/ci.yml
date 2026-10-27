@@ -52,6 +52,9 @@ jobs:
       - name: Rust tests (with the FFmpeg ones)
         working-directory: src-tauri
         run: xvfb-run -a -s "-screen 0 1280x720x24" cargo test --locked -- --include-ignored
+      - name: The test version still builds
+        working-directory: src-tauri
+        run: cargo test --locked --features bench "bench::"
       - name: Rust dependency licences (cargo-deny)
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
@@ -125,8 +128,8 @@ jobs:
         run: |
           cargo build --locked --manifest-path src-tauri/Cargo.toml
           python3 scripts/check_macos_binary.py src-tauri/target/debug/rec
-      - name: The real-device bench (test builds) still builds
-        if: runner.os == 'macOS'
+      # The test version (Tests screen, src/fieldtest.rs) builds on every system.
+      - name: The test version still builds
         working-directory: src-tauri
         run: cargo test --locked --features bench "bench::"
       # The Windows/Linux recorder (src/pipeline.rs) on macOS too, through FFmpeg.

@@ -9,8 +9,30 @@ real screen, camera or microphone: only with the person's OK, recordings deleted
 
 The bench commands run the test build (`--features bench`); on macOS start it as the app
 bundle, e.g. `open -n -W --stdout out.log --stderr out.log "KreoKit Rec Test.app" --args
---bench …`, then `rec --bench-analyze DIR` prints the result. On Windows and Linux the bench comes
-with M3 step 14 (bench builds for friends).
+--bench …`, then `rec --bench-analyze DIR` prints the result.
+
+**The test version for other people** ("KreoKit Rec Test", identifier `com.kreokit.rec.test`,
+built by the "Test version" workflow for Windows, Linux and macOS) opens on a **Tests screen**
+(`src-tauri/src/fieldtest.rs`, `src/components/TestScreen.tsx`) that runs these items by
+clicking, on every system: a small window shows the test pattern, each test records it
+through the real recorder, reads it back, deletes the recording, and keeps only the numbers;
+**Save results** writes one JSON file to the Downloads folder to send back. The tests and
+the items they cover:
+
+| Test on the screen | Items | Passes when |
+|---|---|---|
+| Whole screen (30 s) | 2 | pattern read in every picture, fresh ≥ 99 %, check clean |
+| Part of the screen (20 s) | 3, 4 | the same for a region around the pattern (a black or shifted region fails) |
+| One window (20 s) | 4b | the same for the pattern window recorded as a window |
+| Sound and picture together (30 s, space bar) | 5 | ≥ 10 presses matched; flash − click between −40 and +110 ms |
+| Camera and sound together (25 s, claps) | 6 | ≥ 5 claps matched, no camera frames dropped, check clean (the median is noted) |
+| Computer sound (15 s, the window clicks) | 9 | ≥ 8 clicks in the computer sound, check clean |
+
+On Linux with the ScreenCast portal (Wayland, GNOME, KDE) the screen and region tests are
+left out (the portal's dialog chooses whole displays or windows), and the window, sync and
+sound tests ask in the system's dialog: choose the window "KreoKit Rec test pattern".
+Item 1 is the computer summary at the top of the screen (in the results file), items 7 and 8
+stay manual (and are covered on CI by the simulated hour and the kill -9 tests).
 
 | # | What | How | Passes when |
 |---|---|---|---|

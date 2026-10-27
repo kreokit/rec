@@ -108,7 +108,7 @@ pub fn analyze(dir: &Path) -> Result<Value, String> {
 /// percentile of 10 ms windows), at least -50 dBFS. Measured 2026-10-27 on the dev Mac:
 /// quiet -84 dB, firm space-bar presses -3 to -27 dB peak; a share of the loudest press
 /// missed most of them.
-fn click_threshold(samples: &[f32]) -> f32 {
+pub(crate) fn click_threshold(samples: &[f32]) -> f32 {
     let mut rms: Vec<f32> = samples
         .chunks(480)
         .map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt())
@@ -137,6 +137,28 @@ fn lag(frames: &[testpattern::Frame], g: &Geometry) -> Value {
     ages.sort_by(f64::total_cmp);
     let q = |p: f64| (ages[((ages.len() - 1) as f64 * p).round() as usize] * 10.0).round() / 10.0;
     json!({ "p50": q(0.5), "p95": q(0.95), "max": q(1.0) })
+}
+
+/// The key-tap test from the Tests screen (fieldtest.rs): flashes inside `rect` of
+/// screen.mp4 against the clicks in mic.mp4.
+pub(crate) fn flash_report(dir: &Path, rect: &[u32]) -> Result<Value, String> {
+    let flashes = flash_times(&dir.join("screen.mp4"), rect)?;
+    let (samples, start) = testpattern::read_audio(&dir.join("mic.mp4"))?;
+    let sounds = testpattern::onsets(&samples, start, click_threshold(&samples), 0.3);
+    Ok(json!({
+        "flashes": flashes.len(),
+        "sounds": sounds.len(),
+        // Picture minus sound: positive when the flash shows after the click is heard.
+        "flash_minus_sound_ms": offsets(&flashes, &sounds),
+    }))
+}
+
+/// The clap test from the Tests screen (fieldtest.rs).
+pub(crate) fn clap_report(dir: &Path, status: &Status) -> Result<Value, String> {
+    analyze_claps(
+        dir,
+        &json!({ "status": status, "cpu_percent": Value::Null }),
+    )
 }
 
 /// The clap test: each clap heard in mic.mp4 against the hands meeting in camera.mp4.

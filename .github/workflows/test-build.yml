@@ -1,0 +1,140 @@
+# Builds the test version for people trying KreoKit Rec on their own computers (M3 step 14):
+# "KreoKit Rec Test" (its own identifier, com.kreokit.rec.test, so it never mixes with the
+# real app), with the `bench` feature: it opens on the Tests screen (src/fieldtest.rs), which
+# runs docs/manual-checklist.md by clicking and saves one results file to send back.
+# Unsigned, with our LGPL FFmpeg sidecars, as the release builds. The bundles are workflow
+# artifacts (kept 30 days), never a release. Run it from the Actions tab or `gh workflow run`.
+name: Test version
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+            artifact: KreoKit-Rec-Test-macOS-Apple-Silicon
+          - name: macOS Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+            artifact: KreoKit-Rec-Test-macOS-Intel
+          - name: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            artifact: KreoKit-Rec-Test-Windows
+          # PipeWire 0.3.53+ for cpal's PipeWire host (Ubuntu 24.04 and newer desktops).
+          - name: Linux x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+            artifact: KreoKit-Rec-Test-Linux
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}-test-version
+
+      - name: Linux packages for Tauri, PipeWire, ALSA and V4L2
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            libayatana-appindicator3-dev librsvg2-dev libfuse2 libpipewire-0.3-dev \
+            libspa-0.2-dev libasound2-dev clang libclang-dev
+
+      # FFmpeg sidecars: LGPL builds only (src-tauri/binaries/README.md).
+      - name: Cache macOS FFmpeg build
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: target-ffmpeg
+          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
+      - name: Tools to build FFmpeg
+        if: runner.os == 'macOS'
+        run: brew install meson ninja pkgconf nasm
+      - name: Fetch or build FFmpeg
+        run: python scripts/fetch_ffmpeg.py ${{ matrix.target }} --reuse
+      - name: Verify FFmpeg (LGPL, encoders, a recovery remux)
+        run: python scripts/verify_ffmpeg.py ${{ matrix.target }}
+
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: >-
+            --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --features bench
+            --config src-tauri/tauri.release.conf.json --config src-tauri/tauri.testversion.conf.json
+
+      - name: Check the bundle contents
+        run: |
+          out="src-tauri/target/${{ matrix.target }}/release"
+          exe=""; [[ "${{ runner.os }}" == "Windows" ]] && exe=".exe"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            app=$(ls -d "$out"/bundle/macos/*.app)
+            res="$app/Contents/Resources"; bin="$app/Contents/MacOS"
+            codesign --verify --deep --strict "$app" && echo "ad-hoc signature ok"
+            /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$app/Contents/Info.plist" | grep -qx com.kreokit.rec.test
+            /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" "$app/Contents/Info.plist"
+          else
+            res="$out"; bin="$out"
+          fi
+          for f in "$res/THIRD-PARTY-LICENSES.md" "$res/licenses/FFMPEG-LICENSE.txt" \
+                   "$bin/ffmpeg$exe" "$bin/ffprobe$exe"; do
+            [[ -f "$f" ]] && echo "ok  $f" || { echo "missing $f"; exit 1; }
+          done
+      # The test version runs on macOS 12 too (the dev Mac), so the same check as releases.
+      - name: Check the macOS binaries run on macOS 12
+        if: runner.os == 'macOS'
+        run: |
+          python scripts/check_macos_binary.py --min-macos "$MACOSX_DEPLOYMENT_TARGET" \
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+
+      - name: Collect the files to send
+        run: |
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          mkdir -p upload
+          case "${{ runner.os }}" in
+            macOS) cp "$bundle"/dmg/*.dmg upload/ ;;
+            Windows) cp "$bundle"/nsis/*.exe upload/ ;;
+            Linux) cp "$bundle"/appimage/*.AppImage "$bundle"/deb/*.deb upload/ ;;
+          esac
+          ls -l upload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: upload/*
+          retention-days: 30
+          if-no-files-found: error

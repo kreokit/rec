@@ -1,7 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Bug, Ellipsis } from "lucide-react";
+import { Bug, Ellipsis, FlaskConical } from "lucide-react";
 import mark from "../assets/kreokit-mark.png";
 import { Menu, MenuEntry, toast } from "../ui";
+
+/** Set in the test version (App.tsx): adds "Tests" to the menu. */
+let openTests: (() => void) | null = null;
+export function setOpenTests(open: () => void) {
+  openTests = open;
+}
 
 /**
  * The 48 px app bar: logo mark, title, the ⋯ menu and screen actions (`children`).
@@ -19,6 +25,7 @@ export function TopBar({
 }) {
   const items: MenuEntry[] = [
     ...(onHome ? [{ label: "Back to Home", onSelect: onHome }, "separator" as const] : []),
+    ...(openTests ? [{ label: "Tests", icon: FlaskConical, onSelect: openTests }] : []),
     {
       label: "Report a problem",
       icon: Bug,
