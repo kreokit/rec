@@ -220,6 +220,10 @@ async fn devices() -> Result<Devices, String> {
                 width: 2880,
                 height: 1800,
                 main: true,
+                x: 0.0,
+                y: 0.0,
+                points_width: 1440.0,
+                points_height: 900.0,
             }],
             mics: vec![Mic {
                 id: "synthetic".into(),
@@ -256,16 +260,20 @@ struct Estimate {
 /// The output size and file size per minute for a display at a quality (plus the camera
 /// at its size, 0 × 0 when off), and the space left for recordings.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn estimate(
     app: AppHandle,
     width: u32,
     height: u32,
+    points_width: f64,
+    region: Option<native::Region>,
     quality: u32,
     camera_width: u32,
     camera_height: u32,
     mic: bool,
 ) -> Estimate {
-    let (w, h) = sessions::output_size(width, height, quality);
+    let (source_w, source_h) = sessions::source_size(width, height, points_width, region);
+    let (w, h) = sessions::output_size(source_w, source_h, quality);
     let camera = (camera_width > 0).then(|| sessions::camera_size(camera_width, camera_height));
     let root = recordings(&app).root().to_path_buf();
     let _ = std::fs::create_dir_all(&root);

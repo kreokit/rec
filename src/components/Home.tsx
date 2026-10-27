@@ -55,7 +55,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
   useEffect(() => {
     if (!display) return;
     api
-      .estimate(display.width, display.height, Number(quality), camera?.width ?? 0, camera?.height ?? 0, !!mic)
+      .estimate(display, null, Number(quality), camera?.width ?? 0, camera?.height ?? 0, !!mic)
       .then(setEstimate, () => setEstimate(null));
   }, [display, quality, mic, camera]);
 
@@ -99,6 +99,8 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       camera_name: camera ? camera.name : null,
       camera_width: camera?.width ?? 0,
       camera_height: camera?.height ?? 0,
+      display_points_width: display.points_width,
+      region: null,
     };
     setBusy(true);
     try {

@@ -134,6 +134,7 @@ mod tests {
             state: State::Recording,
             screen: Some(ScreenInfo {
                 display: "Built-in display".into(),
+                region: None,
                 width: 320,
                 height: 180,
                 fps: 30,

@@ -6,7 +6,7 @@ const session = (over: Partial<Session> = {}): Session => ({
   id: "2026-10-27-143200",
   created_at: 0,
   state: "done",
-  screen: { display: "Built-in display", width: 1728, height: 1080, fps: 30 },
+  screen: { display: "Built-in display", region: null, width: 1728, height: 1080, fps: 30 },
   mic: "MacBook Pro Microphone",
   camera: null,
   elapsed_s: 725,

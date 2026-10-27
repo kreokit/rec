@@ -223,6 +223,7 @@ mod tests {
         let rec = Recorder::start(&RecordConfig {
             dir: dir.clone(),
             screen: Some(ScreenConfig {
+                region: None,
                 display_id: 0,
                 width: 640,
                 height: 360,

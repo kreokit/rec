@@ -16,7 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::check::{self, Check};
-use crate::native::{CameraConfig, RecordConfig, ScreenApi, ScreenConfig, Status};
+use crate::native::{CameraConfig, RecordConfig, Region, ScreenApi, ScreenConfig, Status};
 use crate::{awake, disk};
 
 /// Recording stops by itself when less than this is free (the files stay playable).
@@ -48,6 +48,9 @@ impl State {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScreenInfo {
     pub display: String,
+    /// Part of the display (points); `None`: all of it.
+    #[serde(default)]
+    pub region: Option<Region>,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -105,6 +108,36 @@ pub struct Options {
     pub camera_width: u32,
     #[serde(default)]
     pub camera_height: u32,
+    /// The display's width in points (`Display` in native.rs), to turn the region into
+    /// pixels.
+    #[serde(default)]
+    pub display_points_width: f64,
+    /// Part of the display; `None`: all of it.
+    #[serde(default)]
+    pub region: Option<Region>,
+}
+
+/// The smallest region, in points each way.
+pub const MIN_REGION: f64 = 64.0;
+
+/// What is captured, in pixels: the region on a display `width` × `height` pixels and
+/// `points_width` points wide, or the whole display.
+pub fn source_size(
+    width: u32,
+    height: u32,
+    points_width: f64,
+    region: Option<Region>,
+) -> (u32, u32) {
+    match region {
+        Some(r) if points_width > 0.0 => {
+            let scale = width as f64 / points_width;
+            (
+                (r.width * scale).round() as u32,
+                (r.height * scale).round() as u32,
+            )
+        }
+        _ => (width, height),
+    }
 }
 
 /// The output size for a display at a quality: the display's shape, `quality` pixels high
@@ -293,13 +326,22 @@ impl Recordings {
             id = format!("{}-{n}", folder_name(created_at));
             n += 1;
         }
+        if let Some(r) = options.region
+            && (r.width < MIN_REGION || r.height < MIN_REGION)
+        {
+            return Err(format!(
+                "The region is too small to record. Choose one at least {MIN_REGION} × {MIN_REGION} points."
+            ));
+        }
         let dir = self.root.join(&id);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let (width, height) = output_size(
+        let (source_w, source_h) = source_size(
             options.display_width,
             options.display_height,
-            options.quality,
+            options.display_points_width,
+            options.region,
         );
+        let (width, height) = output_size(source_w, source_h, options.quality);
         let camera = options
             .camera_id
             .as_ref()
@@ -310,6 +352,7 @@ impl Recordings {
             state: State::Recording,
             screen: Some(ScreenInfo {
                 display: options.display_name.clone(),
+                region: options.region,
                 width,
                 height,
                 fps: 30,
@@ -339,6 +382,7 @@ impl Recordings {
             dir: dir.clone(),
             screen: Some(ScreenConfig {
                 display_id: options.display_id,
+                region: options.region,
                 width,
                 height,
                 fps: 30,
@@ -677,6 +721,8 @@ pub mod tests {
             camera_name: None,
             camera_width: 0,
             camera_height: 0,
+            display_points_width: 1440.0,
+            region: None,
         }
     }
 
@@ -753,31 +799,32 @@ pub mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Keeps what it was asked to record, then refuses (no files needed).
+    struct Keeps(Arc<Mutex<Option<RecordConfig>>>);
+    impl Backend for Keeps {
+        fn start(&self, config: &RecordConfig) -> Result<Box<dyn Capture>, String> {
+            *self.0.lock().unwrap() = Some(config.clone());
+            Err("stop here".into())
+        }
+    }
+
+    /// Recordings whose starts are kept: the second value holds the last one's config.
+    fn keeping(root: &Path) -> (Recordings, Arc<Mutex<Option<RecordConfig>>>) {
+        let kept = Arc::new(Mutex::new(None));
+        let recordings = Recordings::new(root.to_path_buf(), Box::new(Keeps(kept.clone())));
+        (recordings, kept)
+    }
+
     #[test]
     fn records_the_chosen_camera_at_its_size() {
-        // Keeps what it was asked to record, then refuses (no files needed).
-        struct Keeps(Mutex<Option<RecordConfig>>);
-        impl Backend for Keeps {
-            fn start(&self, config: &RecordConfig) -> Result<Box<dyn Capture>, String> {
-                *self.0.lock().unwrap() = Some(config.clone());
-                Err("stop here".into())
-            }
-        }
         let root = temp_root("camera");
-        let backend = Arc::new(Keeps(Mutex::new(None)));
-        struct Shared(Arc<Keeps>);
-        impl Backend for Shared {
-            fn start(&self, config: &RecordConfig) -> Result<Box<dyn Capture>, String> {
-                self.0.start(config)
-            }
-        }
-        let recordings = Recordings::new(root.clone(), Box::new(Shared(backend.clone())));
+        let (recordings, kept) = keeping(&root);
         let mut opts = options();
         opts.camera_id = Some("cam-1".into());
         opts.camera_name = Some("FaceTime HD Camera".into());
         (opts.camera_width, opts.camera_height) = (1280, 720);
         assert!(recordings.start(&opts).is_err());
-        let config = backend.0.lock().unwrap().take().unwrap();
+        let config = kept.lock().unwrap().take().unwrap();
         let camera = config.camera.unwrap();
         assert_eq!(
             (camera.id.as_str(), camera.width, camera.height),
@@ -786,7 +833,46 @@ pub mod tests {
         assert_eq!(camera.bitrate, video_bitrate(1280, 720));
         // Without a camera: none recorded.
         assert!(recordings.start(&options()).is_err());
-        assert_eq!(backend.0.lock().unwrap().take().unwrap().camera, None);
+        assert_eq!(kept.lock().unwrap().take().unwrap().camera, None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_region_is_recorded_in_its_own_shape() {
+        // 2880 × 1800 pixels, 1440 points wide: 2 pixels per point.
+        let region = Region {
+            x: 100.0,
+            y: 50.0,
+            width: 800.0,
+            height: 450.0,
+        };
+        assert_eq!(source_size(2880, 1800, 1440.0, Some(region)), (1600, 900));
+        assert_eq!(source_size(2880, 1800, 1440.0, None), (2880, 1800));
+        // Not known (an old caller): the whole display.
+        assert_eq!(source_size(2880, 1800, 0.0, Some(region)), (2880, 1800));
+
+        let root = temp_root("region");
+        let (recordings, kept) = keeping(&root);
+        let mut opts = options();
+        opts.region = Some(region);
+        assert!(recordings.start(&opts).is_err());
+        let screen = kept.lock().unwrap().take().unwrap().screen.unwrap();
+        assert_eq!(screen.region, Some(region));
+        // Smaller than 1080p: recorded at its own size.
+        assert_eq!((screen.width, screen.height), (1600, 900));
+        opts.quality = 720;
+        assert!(recordings.start(&opts).is_err());
+        let screen = kept.lock().unwrap().take().unwrap().screen.unwrap();
+        assert_eq!((screen.width, screen.height), (1280, 720));
+
+        // Too small: refused before anything starts.
+        opts.region = Some(Region {
+            width: 40.0,
+            ..region
+        });
+        let error = recordings.start(&opts).unwrap_err();
+        assert!(error.starts_with("The region is too small"), "{error}");
+        assert!(kept.lock().unwrap().is_none());
         let _ = fs::remove_dir_all(&root);
     }
 

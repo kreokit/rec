@@ -25,6 +25,9 @@ typedef struct {
     int capture_fps;     // capture rate (a multiple of fps): one frame kept per output slot
     int screen_api;      // KR_SCREEN_*
     int video_bitrate;   // bits per second
+    // Part of the display, in points from its top-left corner; width 0: the whole display.
+    // The output size above keeps the region's shape.
+    double region_x, region_y, region_width, region_height;
     int mic;             // 1: record a microphone
     const char *mic_id;  // AVCaptureDevice uniqueID; NULL or "": the default microphone
     int camera;                       // 1: record a camera

@@ -16,9 +16,23 @@ export interface Permissions {
 export interface Display {
   id: number;
   name: string;
+  /** In pixels. */
   width: number;
   height: number;
   main: boolean;
+  /** Where it is and its size, in points (top-left of the main display, y down). */
+  x: number;
+  y: number;
+  points_width: number;
+  points_height: number;
+}
+
+/** A rectangle on a display, in points from its top-left corner. */
+export interface Region {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 export interface Mic {
@@ -91,7 +105,7 @@ export interface Session {
   id: string;
   created_at: number;
   state: State;
-  screen: { display: string; width: number; height: number; fps: number } | null;
+  screen: { display: string; region: Region | null; width: number; height: number; fps: number } | null;
   mic: string | null;
   camera: { name: string; width: number; height: number } | null;
   elapsed_s: number;
@@ -119,6 +133,8 @@ export interface Options {
   camera_name: string | null;
   camera_width: number;
   camera_height: number;
+  display_points_width: number;
+  region: Region | null;
 }
 
 export const api = {
@@ -131,8 +147,17 @@ export const api = {
   restartApp: () => invoke<void>("restart_app"),
   devices: () => invoke<{ displays: Display[]; mics: Mic[]; cameras: Camera[] }>("devices"),
   /** The camera's size, or 0 × 0 when it's off. */
-  estimate: (width: number, height: number, quality: number, cameraWidth: number, cameraHeight: number, mic: boolean) =>
-    invoke<Estimate>("estimate", { width, height, quality, cameraWidth, cameraHeight, mic }),
+  estimate: (display: Display, region: Region | null, quality: number, cameraWidth: number, cameraHeight: number, mic: boolean) =>
+    invoke<Estimate>("estimate", {
+      width: display.width,
+      height: display.height,
+      pointsWidth: display.points_width,
+      region,
+      quality,
+      cameraWidth,
+      cameraHeight,
+      mic,
+    }),
   monitorStart: (micId: string) => invoke<void>("monitor_start", { micId }),
   monitorLevel: () => invoke<number>("monitor_level"),
   monitorStop: () => invoke<void>("monitor_stop"),

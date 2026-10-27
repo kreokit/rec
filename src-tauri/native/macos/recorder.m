@@ -645,12 +645,17 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
     }
     CGDirectDisplayID display = cfg.display_id ? cfg.display_id : CGMainDisplayID();
     if (api == KR_SCREEN_CGDISPLAYSTREAM) {
-        NSDictionary *props = @{
+        NSMutableDictionary *props = @{
             (__bridge NSString *)kCGDisplayStreamMinimumFrameTime : @(1.0 / cfg.capture_fps),
             (__bridge NSString *)kCGDisplayStreamShowCursor : @YES,
             (__bridge NSString *)kCGDisplayStreamYCbCrMatrix : (__bridge NSString *)kCGDisplayStreamYCbCrMatrix_ITU_R_709_2,
             (__bridge NSString *)kCGDisplayStreamQueueDepth : @8,
-        };
+        }.mutableCopy;
+        if (cfg.region_width > 0) {
+            CFDictionaryRef rect = CGRectCreateDictionaryRepresentation(
+                CGRectMake(cfg.region_x, cfg.region_y, cfg.region_width, cfg.region_height));
+            props[(__bridge NSString *)kCGDisplayStreamSourceRect] = (__bridge_transfer NSDictionary *)rect;
+        }
         __weak KRRecorder *weak = self;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -692,6 +697,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) {
         SCStreamConfiguration *c = [SCStreamConfiguration new];
         c.width = (size_t)cfg.width;
         c.height = (size_t)cfg.height;
+        if (cfg.region_width > 0) c.sourceRect = CGRectMake(cfg.region_x, cfg.region_y, cfg.region_width, cfg.region_height);
         c.minimumFrameInterval = CMTimeMake(1, cfg.capture_fps);
         c.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         c.colorMatrix = kCGDisplayStreamYCbCrMatrix_ITU_R_709_2;
@@ -1091,7 +1097,12 @@ char *kr_displays_json(void) {
             size_t h = mode ? CGDisplayModeGetPixelHeight(mode) : CGDisplayPixelsHigh(ids[i]);
             if (mode) CGDisplayModeRelease(mode);
             NSString *name = CGDisplayIsBuiltin(ids[i]) ? @"Built-in display" : [NSString stringWithFormat:@"Display %d", ++external];
-            [list addObject:@{@"id" : @(ids[i]), @"name" : name, @"width" : @(w), @"height" : @(h), @"main" : CGDisplayIsMain(ids[i]) ? @YES : @NO}];
+            // Bounds in points, in the global space (top-left of the main display, y down).
+            CGRect b = CGDisplayBounds(ids[i]);
+            [list addObject:@{
+                @"id" : @(ids[i]), @"name" : name, @"width" : @(w), @"height" : @(h), @"main" : CGDisplayIsMain(ids[i]) ? @YES : @NO,
+                @"x" : @(b.origin.x), @"y" : @(b.origin.y), @"points_width" : @(b.size.width), @"points_height" : @(b.size.height)
+            }];
         }
         return jsonCopy(list);
     }

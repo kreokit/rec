@@ -20,6 +20,8 @@ pub enum ScreenApi {
 pub struct ScreenConfig {
     /// 0: the main display.
     pub display_id: u32,
+    /// Part of the display; `None`: all of it. `width`/`height` keep its shape.
+    pub region: Option<Region>,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -82,13 +84,33 @@ pub struct Status {
     pub failed: bool,
 }
 
+/// A rectangle on a display, in points from its top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Region {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Display {
     pub id: u32,
     pub name: String,
+    /// In pixels.
     pub width: u32,
     pub height: u32,
     pub main: bool,
+    /// Where it is, in points (top-left of the main display, y down), and its size in
+    /// points.
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub points_width: f64,
+    #[serde(default)]
+    pub points_height: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,6 +159,10 @@ mod macos {
         capture_fps: c_int,
         screen_api: c_int,
         video_bitrate: c_int,
+        region_x: f64,
+        region_y: f64,
+        region_width: f64,
+        region_height: f64,
         mic: c_int,
         mic_id: *const c_char,
         camera: c_int,
@@ -255,6 +281,7 @@ mod macos {
             let camera_id = CString::new(camera.map(|c| c.id.clone()).unwrap_or_default())
                 .map_err(|e| e.to_string())?;
             let screen = config.screen.as_ref();
+            let region = screen.and_then(|s| s.region);
             let synthetic = config.synthetic.unwrap_or_default();
             let raw = KrRecConfig {
                 dir: dir.as_ptr(),
@@ -270,6 +297,10 @@ mod macos {
                     ScreenApi::ScreenCaptureKit => 2,
                 },
                 video_bitrate: screen.map_or(0, |s| s.bitrate as c_int),
+                region_x: region.map_or(0.0, |r| r.x),
+                region_y: region.map_or(0.0, |r| r.y),
+                region_width: region.map_or(0.0, |r| r.width),
+                region_height: region.map_or(0.0, |r| r.height),
                 mic: config.mic.is_some() as c_int,
                 mic_id: mic_id.as_ptr(),
                 camera: camera.is_some() as c_int,
@@ -532,6 +563,7 @@ mod tests {
             dir,
             screen: Some(ScreenConfig {
                 display_id: 0,
+                region: None,
                 width,
                 height,
                 fps: 30,
