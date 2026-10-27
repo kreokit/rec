@@ -18,6 +18,7 @@ with M3 step 14 (bench builds for friends).
 | 2 | Whole display, fresh frames | `--bench fresh --seconds 60` | fresh ≥ 99 %, no unreadable frames, timestamps regular |
 | 3 | **Region on the real screen** | `--bench fresh --region --seconds 30` (a region around the counter window) | the counter is read back in **every** frame (`bad` 0, `pattern_visible` 1.0) and fresh ≥ 99 %; a black picture or a crop in the wrong place fails here |
 | 4 | Region in the app | Home → Region…, drag a rectangle over a window that changes, record 10 s, play it | the recording shows exactly that rectangle, not black, not shifted; the check after it is clean |
+| 4b | Window | `--bench fresh --window --seconds 60` (the counter window as a window), then in the app: Home → Window, record a window 10 s while covering it with another, then close it | fresh ≥ 99 %; the recording shows only that window, also while covered; after closing, the last picture stays and the check notes when |
 | 5 | Sound against picture | `--bench sync --mic` (press space about once a second) | flash − click within one frame plus the display's delay |
 | 6 | Camera against sound | `--bench camera` (clap about once a second in view) | most claps within one frame; note the median (a camera delay to correct if it's large) |
 | 7 | Long run | `--bench fresh --camera --mic --seconds 600` | fresh ≥ 99 %, no camera frames dropped after the start, tracks end within one frame, check clean; note the CPU |

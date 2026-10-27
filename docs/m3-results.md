@@ -78,6 +78,29 @@ A black screen picture can't pass unnoticed any more: the check after every reco
 reads three frames back and reports a black picture (`check.rs`), and the manual
 checklist (`docs/manual-checklist.md`) has a real region recording.
 
+## Window capture on macOS 12
+
+`--bench fresh --window`: the counter window recorded as a window through ScreenCaptureKit
+(12.3+), at the display's own pixels (900×106), 60 s each, screen only, Mac otherwise idle.
+For comparison the whole display through ScreenCaptureKit (`--api sck`).
+
+| Run | Fresh frames | Stale | Counter read back | CPU (% of one core) |
+|---|---|---|---|---|
+| Window | **100 %** | 0 | every frame | 16.2 % |
+| Window | **99.38 %** | 9 | every frame | 17.2 % |
+| Whole display, ScreenCaptureKit | 99.93 % | 1 | every frame | 14.6 % |
+
+**Decision (by the measurement):** above the 99 % target, so recording a window is offered on
+macOS 12 (`WINDOWS_ON_MACOS_12` in `lib.rs`; if a later measurement fails, it's switched off
+there with a note to record a region instead). When the window closes, the recording keeps its
+last picture and the check says when (tested with the synthetic sources).
+
+## Computer sound (macOS 13+)
+
+Built and unit-tested with a synthetic computer sound (clicks on the whole second, stereo AAC
+48 kHz, in sync with the picture); not measurable on the dev Mac (macOS 12, where the switch
+reads "Needs macOS 13 or newer"). Checked by friends with item 9 of `docs/manual-checklist.md`.
+
 ## Found and fixed during the tests
 
 - **Crash when the camera started:** the FaceTime camera offers 30 fps as 1/30.00003 s and
@@ -90,6 +113,8 @@ checklist (`docs/manual-checklist.md`) has a real region recording.
 - **"The microphone sent no sound for 0.4 s" after every recording:** the mic's first sound
   comes 0.35 s after the start. That silence still keeps the sound in sync, but isn't
   reported any more.
+- **The window bench couldn't be read:** a window 450.5 points wide becomes 900 pixels (even),
+  but the reader asked for a 901-pixel strip; it now reads 33 squares.
 - **Region recorded black on macOS 12:** redone as whole display + GPU crop (above).
 - **5 camera frames dropped at the start:** the ~28 slots filled with the camera's first
   picture overflowed the encoder's queue while it was starting. Repeated pictures don't

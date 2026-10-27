@@ -21,7 +21,8 @@ measuring first.
    webview's own camera support (WebKit on macOS 12, WebView2, WebKitGTK all differ). The
    preview stops while the setup screen is hidden. (The on-screen camera bubble while
    recording stays in M5 with the floating controls.)
-4. **Computer sound on macOS 13+.** ScreenCaptureKit audio (weak-linked, runtime check)
+4. **Computer sound on macOS 13+.** *(Built 2026-10-27, unit-tested with the synthetic
+   sound; real 13+ check by friends, `docs/manual-checklist.md` item 9.)* ScreenCaptureKit audio (weak-linked, runtime check)
    into its own `system.mp4` (AAC 48 kHz stereo). On macOS 12 the toggle shows
    "Needs macOS 13 or newer". **Can't be tried on the dev Mac**: built and unit-tested
    here, checked on CI macOS 14/15 as far as permissions allow there, and on a friend's
@@ -33,7 +34,8 @@ measuring first.
    friends, `docs/manual-checklist.md`.)* Choosing it: a see-through overlay on the chosen display,
    drag a rectangle, size shown, Enter/Record to confirm, Esc to cancel. Output keeps the
    region's shape, scaled to 1080p/720p at most, even sizes.
-6. **Window capture.** ScreenCaptureKit window stream (as OBS does on macOS 12.5+;
+6. **Window capture.** *(Done 2026-10-27: measured on macOS 12 at 100 % / 99.38 % fresh, so
+   offered there; `docs/m3-results.md`.)* ScreenCaptureKit window stream (as OBS does on macOS 12.5+;
    CGDisplayStream can't do windows). Window list with app name + title (thumbnails later).
    Before relying on it on macOS 12, measure fresh frames with `--bench fresh --api sck`
    on a window, **only with the user's OK**. If it can't reach ≥ 99 % on 12, the window
