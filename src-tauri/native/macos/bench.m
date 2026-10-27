@@ -3,13 +3,15 @@
 // Started as the app bundle (`open -n "KreoKit Rec Test.app" --args --bench ...`) so macOS
 // asks for permission for the app itself; `rec --bench-analyze DIR` reads the results.
 //
-//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60] [--mic] [--camera]
+//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60] [--mic] [--camera] [--region]
 //       A small window shows the test pattern of src/testpattern.rs: a counter that steps
 //       60 times a second and stands still for 2 s of every 10 s. The recording shows
 //       whether every output frame caught the newest picture (fresh), repeated it because
 //       nothing changed (unchanged), or missed a change (stale). --camera also records the
 //       default camera at 720p (the long run of screen + camera + mic); the process's CPU
-//       use is reported too.
+//       use is reported too. --region records only a region around the window (24 points
+//       on each side), so reading the counter back checks that the crop is the right part
+//       of the screen.
 //   --bench sync --out DIR [--seconds 45]
 //       The tap test for sound against picture. The window waits in front of everything
 //       until the user clicks it and presses space; that first press starts the
@@ -136,7 +138,7 @@ int kr_bench_main(int argc, const char **argv) {
         NSString *mode = nil, *out = nil, *api = @"auto";
         double seconds = 0;
         int captureFps = 60;
-        BOOL mic = NO, camera = NO;
+        BOOL mic = NO, camera = NO, region = NO;
         for (int i = 1; i < argc; i++) {
             const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : "";
             if (!strcmp(a, "--bench")) mode = @(v), i++;
@@ -146,6 +148,7 @@ int kr_bench_main(int argc, const char **argv) {
             else if (!strcmp(a, "--capture-fps")) captureFps = atoi(v), i++;
             else if (!strcmp(a, "--mic")) mic = YES;
             else if (!strcmp(a, "--camera")) camera = YES;
+            else if (!strcmp(a, "--region")) region = YES;
         }
         if ([mode isEqual:@"check"]) {
             // What this app may record, and the devices it sees (no recording).
@@ -159,7 +162,7 @@ int kr_bench_main(int argc, const char **argv) {
         }
         BOOL sync = [mode isEqual:@"sync"], clap = [mode isEqual:@"camera"];
         if (!out || !(sync || clap || [mode isEqual:@"fresh"])) {
-            fprintf(stderr, "usage: --bench fresh|sync|camera --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic] [--camera]\n");
+            fprintf(stderr, "usage: --bench fresh|sync|camera --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic] [--camera] [--region]\n");
             return 2;
         }
         if (seconds <= 0) seconds = sync || clap ? 45 : 60;
@@ -174,6 +177,7 @@ int kr_bench_main(int argc, const char **argv) {
         NSWindow *window;
         NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:@{@"mode" : mode, @"width" : @(w), @"height" : @(h), @"capture_fps" : @(captureFps), @"api" : api}];
         KRFlashView *flash = nil;
+        CGRect area = CGRectZero; // --region, display points from the top-left
         if (clap) {
             window = nil;
             camera = YES;
@@ -212,7 +216,20 @@ int kr_bench_main(int argc, const char **argv) {
                 if (!stillAt(hostNow() - gZero)) view.needsDisplay = YES;
             }];
             CGFloat top = NSMaxY(screen.frame) - NSMaxY(frame);
-            info[@"pattern"] = @{@"x" : @((frame.origin.x - screen.frame.origin.x) * scale), @"y" : @(top * scale), @"cell" : @(cellPt * scale), @"rate" : @(kRate), @"still_periods" : @YES};
+            CGFloat left = frame.origin.x - screen.frame.origin.x;
+            if (region) {
+                // Same output pixels per point as the whole display, so the squares stay 16 px.
+                CGFloat m = 24;
+                area = CGRectMake(left - m, top - m, frame.size.width + 2 * m, frame.size.height + 2 * m);
+                w = (int)(area.size.width * scale) & ~1;
+                h = (int)(area.size.height * scale) & ~1;
+                info[@"width"] = @(w);
+                info[@"height"] = @(h);
+                info[@"region"] = @[ @(area.origin.x), @(area.origin.y), @(area.size.width), @(area.size.height) ];
+                left = m;
+                top = m;
+            }
+            info[@"pattern"] = @{@"x" : @(left * scale), @"y" : @(top * scale), @"cell" : @(cellPt * scale), @"rate" : @(kRate), @"still_periods" : @YES};
         }
 
         KrRecConfig cfg = {0};
@@ -224,6 +241,10 @@ int kr_bench_main(int argc, const char **argv) {
         cfg.capture_fps = captureFps;
         cfg.screen_api = [api isEqual:@"cgd"] ? KR_SCREEN_CGDISPLAYSTREAM : [api isEqual:@"sck"] ? KR_SCREEN_SCREENCAPTUREKIT : KR_SCREEN_AUTO;
         cfg.video_bitrate = (int)(w * h * 30 * 0.13);
+        cfg.region_x = area.origin.x;
+        cfg.region_y = area.origin.y;
+        cfg.region_width = area.size.width;
+        cfg.region_height = area.size.height;
         cfg.mic = mic;
         cfg.screen = !clap;
         cfg.camera = camera;
