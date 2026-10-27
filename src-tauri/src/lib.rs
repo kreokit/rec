@@ -38,12 +38,16 @@ mod fieldtest {
 }
 mod jpeg;
 mod layout;
+mod loudness;
 mod native;
 mod pipeline;
+mod polish;
 mod preview;
 mod probe;
 mod recovery;
+mod rnnoise;
 mod sessions;
+mod sound;
 mod synthetic;
 #[cfg(any(test, feature = "bench"))]
 mod testpattern;
@@ -695,6 +699,67 @@ async fn recording_waveform(app: AppHandle, id: String) -> Result<tauri::ipc::Re
     .await
 }
 
+/// The running sound job (sound.rs); a new one cancels it.
+#[derive(Default)]
+struct SoundJob(std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>);
+
+#[derive(Clone, Serialize)]
+struct SoundProgress {
+    id: String,
+    /// "clean" or "loudness".
+    stage: &'static str,
+    fraction: f64,
+}
+
+/// The preview's sound for these choices (made if needed, with "sound-progress" events);
+/// `None` without any sound track. Errors "cancelled" when a newer request replaced it.
+#[tauri::command]
+async fn prepare_sound(
+    app: AppHandle,
+    id: String,
+    clean: bool,
+    loudness: finish::Loudness,
+) -> Result<Option<PathBuf>, String> {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    if let Some(old) = app
+        .state::<SoundJob>()
+        .0
+        .lock()
+        .unwrap()
+        .replace(cancel.clone())
+    {
+        old.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    blocking(move || {
+        let dir = recordings(&app).dir(&id)?;
+        let session = sessions::read_session(&dir)
+            .ok_or("This recording no longer exists. Go back to Home and choose another one.")?;
+        let duration = session.check.as_ref().map_or(session.elapsed_s, |c| c.duration_s);
+        let mut last = ("", -1.0f64);
+        let result = sound::preview(&dir, duration, clean, loudness, &cancel, &mut |stage, f| {
+            if stage != last.0 || f - last.1 >= 0.01 || f >= 1.0 {
+                last = (stage, f);
+                let _ = app.emit(
+                    "sound-progress",
+                    SoundProgress {
+                        id: id.clone(),
+                        stage,
+                        fraction: f,
+                    },
+                );
+            }
+        });
+        result.map_err(|e| {
+            if e == "cancelled" {
+                e
+            } else {
+                format!("The sound couldn't be prepared ({e}). Try again, or switch off Clean up voice and export without it.")
+            }
+        })
+    })
+    .await
+}
+
 /// The recording's Finish choices (saved ones, or the first choices).
 #[tauri::command]
 async fn finish_settings(app: AppHandle, id: String) -> Result<finish::Settings, String> {
@@ -793,6 +858,7 @@ pub fn run() {
             finish_settings,
             recording_media,
             recording_waveform,
+            prepare_sound,
             save_finish_settings,
             pending_recoveries,
             recover_recording,
@@ -814,6 +880,7 @@ pub fn run() {
                 recordings.synthetic = Some(native::Synthetic::default());
             }
             app.manage(recordings);
+            app.manage(SoundJob::default());
             Ok(())
         })
         .build(tauri::generate_context!())

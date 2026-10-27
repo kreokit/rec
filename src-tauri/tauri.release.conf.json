@@ -14,7 +14,8 @@
     },
     "resources": {
       "../THIRD-PARTY-LICENSES.md": "THIRD-PARTY-LICENSES.md",
-      "binaries/FFMPEG-LICENSE.txt": "licenses/FFMPEG-LICENSE.txt"
+      "binaries/FFMPEG-LICENSE.txt": "licenses/FFMPEG-LICENSE.txt",
+      "rnnoise/COPYING": "licenses/RNNOISE-COPYING.txt"
     }
   }
 }

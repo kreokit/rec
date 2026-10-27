@@ -220,6 +220,13 @@ export interface FinishSettings {
   loudness: Loudness;
 }
 
+/** Progress of `prepareSound` (event "sound-progress"). */
+export interface SoundProgress {
+  id: string;
+  stage: "clean" | "loudness";
+  fraction: number;
+}
+
 /** A recording's tracks (absolute paths; null when not recorded). */
 export interface Media {
   screen: string | null;
@@ -316,6 +323,9 @@ export const api = {
   recordingMedia: (id: string) => invoke<Media>("recording_media", { id }),
   /** One level byte per 10 ms (src-tauri/src/waveform.rs). */
   recordingWaveform: (id: string) => invoke<ArrayBuffer>("recording_waveform", { id }),
+  /** The preview's processed sound for these choices (null without sound); rejects "cancelled" when replaced. */
+  prepareSound: (id: string, clean: boolean, loudness: Loudness) =>
+    invoke<string | null>("prepare_sound", { id, clean, loudness }),
   pendingRecoveries: () => invoke<Session[]>("pending_recoveries"),
   recoverRecording: (id: string) => invoke<Session>("recover_recording", { id }),
   /** null in releases (no Tests screen). */

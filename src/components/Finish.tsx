@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   ArrowDownLeft,
   ArrowDownRight,
@@ -13,11 +14,11 @@ import {
 import { Stage } from "./Stage";
 import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
-import { Bubble, BubbleShape, BubbleSize, FinishSettings, Layout, Loudness, Media, Session, api } from "../lib/api";
+import { Bubble, BubbleShape, BubbleSize, FinishSettings, Layout, Loudness, Media, Session, SoundProgress, api } from "../lib/api";
 import { checkSummary, formatDuration, recordingTitle } from "../lib/format";
 import { usePlayer } from "../lib/player";
 import { Trim, formatTime, savedEnd, snap, withEnd, withStart } from "../lib/trim";
-import { Button, ICON_STROKE, IconButton, Kbd, SectionLabel, Segmented, Switch, toast } from "../ui";
+import { Button, ICON_STROKE, IconButton, Kbd, ProgressBar, SectionLabel, Segmented, Switch, toast } from "../ui";
 import "../styles/finish.css";
 
 const LOUDNESS: { value: Loudness; label: string; hint: string }[] = [
@@ -105,9 +106,11 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
 
   const screenRef = useRef<HTMLVideoElement>(null);
   const cameraRef = useRef<HTMLVideoElement>(null);
+  const soundRef = useRef<HTMLAudioElement>(null);
   const micRef = useRef<HTMLAudioElement>(null);
   const systemRef = useRef<HTMLAudioElement>(null);
-  const refs = useMemo(() => [micRef, systemRef, screenRef, cameraRef], []);
+  // The processed sound leads once it's there; until then the recorded tracks.
+  const refs = useMemo(() => [soundRef, micRef, systemRef, screenRef, cameraRef], []);
   const player = usePlayer(refs, trim, fps);
   // Open at the trim's start.
   useEffect(() => {
@@ -120,6 +123,38 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
     player.seek(edge === "start" ? next.start : next.end);
     return next;
   };
+
+  // The processed sound for the voice choices, made in the background.
+  const [sound, setSound] = useState<{ path: string | null; progress: SoundProgress | null; error: string | null }>({
+    path: null,
+    progress: null,
+    error: null,
+  });
+  const hasSound = !!(session.mic || session.system_audio);
+  useEffect(() => {
+    if (!settings || !hasSound) return;
+    let live = true;
+    setSound((s) => ({ ...s, progress: { id: session.id, stage: "loudness", fraction: 0 }, error: null }));
+    const stop = listen<SoundProgress>("sound-progress", (e) => {
+      if (live && e.payload.id === session.id) setSound((s) => ({ ...s, progress: e.payload }));
+    });
+    api.prepareSound(session.id, settings.clean_voice, settings.loudness).then(
+      (path) => {
+        if (!live) return;
+        // The new sound replaces the old one where the playhead is.
+        player.pause();
+        setSound({ path, progress: null, error: null });
+      },
+      (e) => live && String(e) !== "cancelled" && setSound((s) => ({ ...s, progress: null, error: String(e) })),
+    );
+    return () => {
+      live = false;
+      void stop.then((f) => f());
+    };
+  }, [settings?.clean_voice, settings?.loudness, settings === null]);
+  useEffect(() => {
+    if (sound.path) player.seek(player.time);
+  }, [sound.path]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -199,8 +234,14 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
               onBubbleDone={() => settings && change({}, true)}
             />
           )}
-          {media?.mic && <audio ref={micRef} src={convertFileSrc(media.mic)} preload="auto" />}
-          {media?.system && <audio ref={systemRef} src={convertFileSrc(media.system)} preload="auto" />}
+          {sound.path ? (
+            <audio key={sound.path} ref={soundRef} src={convertFileSrc(sound.path)} preload="auto" />
+          ) : (
+            <>
+              {media?.mic && <audio ref={micRef} src={convertFileSrc(media.mic)} preload="auto" />}
+              {media?.system && <audio ref={systemRef} src={convertFileSrc(media.system)} preload="auto" />}
+            </>
+          )}
           <div className="transport">
             <IconButton
               icon={player.playing ? Pause : Play}
@@ -277,6 +318,10 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
                   checked={settings.clean_voice}
                   onChange={(clean_voice) => change({ clean_voice })}
                 />
+                <p className="finish-hint">
+                  Removes background noise from the microphone.
+                  {session.system_audio ? " The computer sound stays as it is." : ""}
+                </p>
               </section>
             )}
             {(session.mic || session.system_audio) && (
@@ -288,6 +333,21 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
                   options={LOUDNESS}
                   onChange={(loudness) => change({ loudness })}
                 />
+                {sound.progress ? (
+                  <div className="finish-sound-status">
+                    <span>
+                      {sound.progress.stage === "clean" ? "Cleaning up the voice…" : "Setting the loudness…"}{" "}
+                      {Math.round(sound.progress.fraction * 100)}%
+                    </span>
+                    <ProgressBar value={sound.progress.fraction * 100} label="Preparing the sound" />
+                  </div>
+                ) : sound.error ? (
+                  <p className="finish-sound-error" role="alert">
+                    {sound.error}
+                  </p>
+                ) : sound.path ? (
+                  <p className="finish-hint">The preview plays the sound as it will be exported.</p>
+                ) : null}
               </section>
             )}
           </aside>

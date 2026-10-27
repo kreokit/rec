@@ -23,8 +23,10 @@ pipe-recorder = []
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
-# Compiling the macOS recorder (native/macos, Objective-C).
+# Compiling the macOS recorder (native/macos, Objective-C) and the vendored RNNoise C
+# library, and checking RNNoise's downloaded model (build.rs).
 cc = "1.9.0"
+sha2 = "0.10.9"
 
 [dependencies]
 # macos-private-api: the see-through region overlay (app.macOSPrivateApi).
@@ -33,6 +35,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+# EBU R128 loudness and true peak (port of libebur128), as in KreoKit Voice.
+ebur128 = "0.1.10"
 
 # Free disk space before and during recording (statvfs); already in the tree through other crates.
 [target.'cfg(unix)'.dependencies]
