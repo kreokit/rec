@@ -31,10 +31,14 @@ stripes must show there).
   CGDisplayStream + camera + mic run (25 %).
 - 10-minute run: no frames dropped on any track, all tracks 601.0 s, start/end offsets 0 ms,
   camera times regular; 2 screen and 81 camera frames late (repeated).
-- **One dropout at 293.2 s, caused by the Mac, not the capture:** the whole picture was black
-  for 1.6 s and the mic sent nothing for 2.35 s. The power log shows "Display is turned off"
-  at that second, a lid event (`AppleACPILid`) and the display back on a second later, with
-  the audio hardware going through sleep/wake. The recorder kept going: the picture stayed
+- **One dropout at 293.2 s, a hardware fault of the dev Mac, not the capture:** the whole
+  picture was black for 1.6 s and the mic sent nothing for 2.35 s. The power log shows
+  "Display is turned off" at that second, a lid event (`AppleACPILid`) and the display back
+  on a second later, with the audio hardware going through sleep/wake. The user confirmed
+  the Mac has a display fault (the screen goes black at some lid angles; real sleep shows
+  the lock screen). Idle display sleep isn't the cause: recordings hold
+  `PreventUserIdleDisplaySleep` (`awake.rs`; Windows `ES_DISPLAY_REQUIRED`, Linux
+  `systemd-inhibit --what=idle:sleep`). The recorder kept going: the picture stayed
   in step and the mic gap was filled with silence (the check noted it). That frame
   stretch is the one "bad" counter read (the counter wasn't visible).
 
