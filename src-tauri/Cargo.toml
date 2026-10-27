@@ -54,6 +54,12 @@ v4l = "0.14.0"
 cpal = { version = "0.18.2", features = ["pipewire"] }
 tokio = { version = "1", features = ["rt", "time"] }
 
+# The menu bar item / tray icon while recording (lib.rs `tray_open`): macOS and Windows
+# only. On Linux it would bundle libayatana-indicator (GPL-3.0) into the AppImage; the
+# test-version workflow checks that none is there.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-capture = "2.0.1"
 cpal = "0.18.2"

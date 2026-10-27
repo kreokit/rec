@@ -30,6 +30,14 @@ uses the third-party components below, each under its own licence.
   are **not** used.
 - The licence ships with the app as `licenses/RNNOISE-COPYING.txt`.
 
+## System libraries (not bundled)
+
+- **No tray icon on Linux:** the AppIndicator library a Linux tray icon needs depends on
+  `libayatana-indicator` (**GPL-3.0**), which Tauri's AppImage would bundle. The tray is
+  built only for macOS (menu bar) and Windows; on Linux, where the floating control would
+  be recorded, the app's window steps aside to the taskbar instead. The Linux test build
+  fails if any AppIndicator library ends up in the AppImage or the .deb's dependencies.
+
 ## FFmpeg (bundled program)
 
 KreoKit Rec bundles `ffmpeg` and `ffprobe` from **FFmpeg 9.0.2** as separate programs

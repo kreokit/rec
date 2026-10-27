@@ -72,7 +72,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
-            libayatana-appindicator3-dev librsvg2-dev libfuse2 libpipewire-0.3-dev \
+            librsvg2-dev libfuse2 libpipewire-0.3-dev \
             libspa-0.2-dev libasound2-dev clang libclang-dev
 
       # FFmpeg sidecars: LGPL builds only (src-tauri/binaries/README.md).
@@ -115,6 +115,20 @@ jobs:
                    "$bin/ffmpeg$exe" "$bin/ffprobe$exe"; do
             [[ -f "$f" ]] && echo "ok  $f" || { echo "missing $f"; exit 1; }
           done
+      # No tray on Linux: libayatana-indicator (a dependency of the AppIndicator library) is
+      # GPL-3.0 and must never be bundled (THIRD-PARTY-LICENSES.md, "System libraries").
+      - name: Check no AppIndicator libraries are bundled
+        if: runner.os == 'Linux'
+        run: |
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          cd "$RUNNER_TEMP" && rm -rf squashfs-root
+          "$GITHUB_WORKSPACE/$bundle"/appimage/*.AppImage --appimage-extract > /dev/null
+          found=$(find squashfs-root \( -iname '*indicator*' -o -iname '*dbusmenu*' \) -print)
+          [[ -z "$found" ]] || { echo "AppIndicator libraries bundled:"; echo "$found"; exit 1; }
+          deps=$(dpkg-deb -f "$GITHUB_WORKSPACE/$bundle"/deb/*.deb Depends)
+          echo "deb depends: $deps"
+          [[ "$deps" != *indicator* ]] || { echo "the .deb depends on an AppIndicator library"; exit 1; }
+          echo "no AppIndicator libraries"
       # The test version runs on macOS 12 too (the dev Mac), so the same check as releases.
       - name: Check the macOS binaries run on macOS 12
         if: runner.os == 'macOS'

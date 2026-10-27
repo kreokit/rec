@@ -56,6 +56,10 @@ mod testpattern;
 mod waveform;
 
 use std::path::PathBuf;
+#[cfg(any(target_os = "macos", windows))]
+use std::sync::Arc;
+#[cfg(any(target_os = "macos", windows))]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -81,6 +85,15 @@ fn synthetic() -> Option<String> {
     } else {
         None
     }
+}
+
+/// Whether the app's own windows can be kept out of display and region recordings.
+/// `KREOKIT_REC_NO_EXCLUSION=1` (debug and test builds) acts as a system that can't, to try
+/// the menu bar / tray path on a Mac that can.
+fn exclusion_available() -> bool {
+    let off = cfg!(any(debug_assertions, feature = "bench"))
+        && std::env::var("KREOKIT_REC_NO_EXCLUSION").is_ok_and(|v| v == "1");
+    !off && (synthetic().is_some() || native::exclusion_supported())
 }
 
 /// The one Recordings for the app, in the app data folder's "recordings".
@@ -367,7 +380,7 @@ async fn devices() -> Result<Devices, String> {
             windows_note: None,
             regions: true,
             regions_note: None,
-            own_windows_kept_out: true,
+            own_windows_kept_out: exclusion_available(),
             os: std::env::consts::OS,
         });
     }
@@ -384,7 +397,7 @@ async fn devices() -> Result<Devices, String> {
             windows_note,
             regions,
             regions_note,
-            own_windows_kept_out: native::exclusion_supported(),
+            own_windows_kept_out: exclusion_available(),
             os: std::env::consts::OS,
         })
     })
@@ -618,7 +631,7 @@ async fn camera_preview_stop() -> Result<(), String> {
 fn own_windows(app: &AppHandle, on: bool) -> Vec<u32> {
     #[cfg(target_os = "macos")]
     {
-        if !on {
+        if !on || !exclusion_available() {
             return Vec::new();
         }
         let handles: Vec<usize> = app
@@ -640,7 +653,7 @@ fn own_windows(app: &AppHandle, on: bool) -> Vec<u32> {
     }
     #[cfg(windows)]
     {
-        if native::exclusion_supported() {
+        if exclusion_available() {
             for window in app.webview_windows().values() {
                 if let Ok(hwnd) = window.hwnd() {
                     native::exclude_from_capture(hwnd.0 as isize, on);
@@ -714,7 +727,7 @@ static CONTROL_ON: std::sync::Mutex<Option<Display>> = std::sync::Mutex::new(Non
 fn control_open(app: &AppHandle, options: &Options) -> Result<bool, String> {
     control_close(app);
     let displays = display_list();
-    let kept_out = synthetic().is_some() || native::exclusion_supported();
+    let kept_out = exclusion_available();
     let Some(display) = floating::control_display(
         &displays,
         options.display_id,
@@ -810,6 +823,148 @@ fn control_close(app: &AppHandle) {
     let _ = window.destroy();
 }
 
+/// The menu bar item (macOS) or tray icon (Windows, Linux) while recording where the
+/// floating control would be recorded (docs/m5-plan.md, choice 1): the time, Pause/Resume,
+/// Stop, Show KreoKit Rec. A thread keeps its time and labels current. Not on Linux
+/// (THIRD-PARTY-LICENSES.md, "System libraries"): the main window steps aside to the taskbar.
+#[cfg(any(target_os = "macos", windows))]
+struct Tray {
+    icon: tauri::tray::TrayIcon,
+    pause: tauri::menu::MenuItem<tauri::Wry>,
+    stop: Arc<AtomicBool>,
+}
+
+#[cfg(any(target_os = "macos", windows))]
+static TRAY: std::sync::Mutex<Option<Tray>> = std::sync::Mutex::new(None);
+
+/// What the menu bar shows: "● 0:12", "Paused 0:12", "Starting…".
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn tray_title(state: sessions::State, elapsed: f64) -> String {
+    match state {
+        sessions::State::Countdown => "Starting…".into(),
+        sessions::State::Paused => format!("Paused {}", format_time(elapsed)),
+        _ => format!("● {}", format_time(elapsed)),
+    }
+}
+
+/// 0:12, 12:05, 1:02:03.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+fn format_time(seconds: f64) -> String {
+    let s = seconds.max(0.0) as u64;
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+#[cfg(any(target_os = "macos", windows))]
+fn tray_open(app: &AppHandle) -> Result<(), String> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+    use tauri::tray::TrayIconBuilder;
+    tray_close();
+    let e = |e: tauri::Error| e.to_string();
+    let pause = MenuItem::with_id(app, "pause", "Pause", true, None::<&str>).map_err(e)?;
+    let stop = MenuItem::with_id(app, "stop", "Stop", true, None::<&str>).map_err(e)?;
+    let show = MenuItem::with_id(app, "show", "Show KreoKit Rec", true, None::<&str>).map_err(e)?;
+    let separator = PredefinedMenuItem::separator(app).map_err(e)?;
+    let menu = Menu::with_items(app, &[&pause, &stop, &separator, &show]).map_err(e)?;
+    let mut builder = TrayIconBuilder::with_id("recording")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .tooltip("KreoKit Rec: recording")
+        .on_menu_event(|app, event| {
+            let app = app.clone();
+            match event.id().as_ref() {
+                "pause" => {
+                    tauri::async_runtime::spawn(async move {
+                        let _ = blocking(move || {
+                            let r = recordings(&app);
+                            let live = r.live().ok_or("Nothing is being recorded.")?;
+                            match live.session.state {
+                                sessions::State::Paused => r.resume(),
+                                _ => r.pause(),
+                            }
+                        })
+                        .await;
+                    });
+                }
+                "stop" => {
+                    tauri::async_runtime::spawn(async move {
+                        let counting = recordings(&app)
+                            .live()
+                            .is_some_and(|l| l.session.state == sessions::State::Countdown);
+                        if counting {
+                            let _ = countdown_cancel(app).await;
+                        } else {
+                            let _ = stop_recording(app).await;
+                        }
+                    });
+                }
+                "show" => main_window_back(&app),
+                _ => {}
+            }
+        });
+    // The menu bar shows the time as text; Windows and Linux need an icon (time in the
+    // tooltip).
+    if cfg!(target_os = "macos") {
+        builder = builder.title("Starting…");
+    } else if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    let icon = builder.build(app).map_err(e)?;
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    {
+        let (app, stop_flag, icon, pause) =
+            (app.clone(), stop_flag.clone(), icon.clone(), pause.clone());
+        std::thread::spawn(move || {
+            while !stop_flag.load(Ordering::SeqCst) {
+                if let Some(live) = recordings(&app).live() {
+                    let state = live.session.state;
+                    let title = tray_title(state, live.status.elapsed);
+                    if cfg!(target_os = "macos") {
+                        let _ = icon.set_title(Some(&title));
+                    }
+                    let _ = icon.set_tooltip(Some(&format!("KreoKit Rec: {title}")));
+                    let _ = pause.set_text(if state == sessions::State::Paused {
+                        "Resume"
+                    } else {
+                        "Pause"
+                    });
+                    let _ = pause.set_enabled(
+                        state != sessions::State::Countdown && live.session.error.is_none(),
+                    );
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        });
+    }
+    *TRAY.lock().unwrap() = Some(Tray {
+        icon,
+        pause,
+        stop: stop_flag,
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn tray_open(_app: &AppHandle) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn tray_close() {}
+
+#[cfg(any(target_os = "macos", windows))]
+fn tray_close() {
+    if let Some(tray) = TRAY.lock().unwrap().take() {
+        tray.stop.store(true, Ordering::SeqCst);
+        let _ = tray.icon.set_visible(false);
+        drop(tray.pause);
+    }
+}
+
 /// The main window steps aside while the floating control is shown...
 fn main_window_aside(app: &AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
@@ -880,6 +1035,13 @@ async fn start_recording(
         own_windows(&app, false);
     } else if control {
         main_window_aside(&app);
+    } else {
+        // The floating control would be recorded: the menu bar or tray instead (on Linux
+        // only the taskbar: the main window steps aside there too).
+        if let Err(e) = tray_open(&app) {
+            eprintln!("tray: {e}");
+        }
+        main_window_aside(&app);
     }
     started
 }
@@ -917,6 +1079,7 @@ async fn countdown_cancel(app: AppHandle) -> Result<(), String> {
     })
     .await;
     control_close(&app);
+    tray_close();
     main_window_back(&app);
     let _ = app.emit_to("main", "recording-cancelled", ());
     cancelled
@@ -949,8 +1112,9 @@ async fn stop_recording(app: AppHandle) -> Result<Session, String> {
     })
     .await;
     control_close(&app);
+    tray_close();
     main_window_back(&app);
-    // The stop may come from the floating control: the main window opens Finish.
+    // The stop may come from the floating control or tray: the main window opens Finish.
     if let Ok(session) = &stopped {
         let _ = app.emit_to("main", "recording-stopped", session);
     }
@@ -1470,6 +1634,15 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_menu_bar_shows_the_time() {
+        use crate::sessions::State;
+        assert_eq!(super::tray_title(State::Recording, 12.9), "● 0:12");
+        assert_eq!(super::tray_title(State::Paused, 725.0), "Paused 12:05");
+        assert_eq!(super::tray_title(State::Recording, 3723.0), "● 1:02:03");
+        assert_eq!(super::tray_title(State::Countdown, 0.0), "Starting…");
+    }
+
     #[test]
     fn report_problem_opens_the_bug_form() {
         assert_eq!(
