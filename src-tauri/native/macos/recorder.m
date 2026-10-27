@@ -52,6 +52,7 @@ static void setError(char *error, size_t len, NSString *message) {
     CMSampleBufferRef sb;
     int64_t index; // video: the frame's slot
     int64_t samples;
+    int64_t cost; // what it takes of the queue's limit
 }
 @end
 @implementation KRItem
@@ -75,6 +76,7 @@ static void setError(char *error, size_t len, NSString *message) {
     int64_t limit;
     _Atomic int64_t dropped;
     NSString *path;
+    CVPixelBufferRef last; // the picture enqueued last (retained, so a pool can't reuse it for a new one)
 }
 @end
 
@@ -114,18 +116,30 @@ static void setError(char *error, size_t len, NSString *message) {
     return w;
 }
 
+- (void)dealloc {
+    CVPixelBufferRelease(last);
+}
+
 - (int64_t)sizeOf:(KRItem *)item {
     return item->pb ? 1 : item->samples;
 }
 
-// Takes ownership of `item`. Returns NO when it was dropped (queue full).
+// Takes ownership of `item`. Returns NO when it was dropped (queue full). A frame repeating
+// the picture before it takes no memory and doesn't count against the limit: a camera's
+// first picture fills ~28 slots at once while its encoder is still starting (5 frames
+// dropped there in the 10-minute run, 2026-10-27).
 - (BOOL)enqueue:(KRItem *)item {
     int64_t size = [self sizeOf:item];
-    if (atomic_load(&queued) + size > limit) {
+    item->cost = item->pb && item->pb == last ? 0 : size;
+    if (item->cost && atomic_load(&queued) + item->cost > limit) {
         atomic_fetch_add(&dropped, size);
         return NO;
     }
-    atomic_fetch_add(&queued, size);
+    if (item->pb && item->pb != last) {
+        CVPixelBufferRelease(last);
+        last = CVPixelBufferRetain(item->pb);
+    }
+    atomic_fetch_add(&queued, item->cost);
     dispatch_async(queue, ^{
         [self->pending addObject:item];
         [self drain];
@@ -138,7 +152,7 @@ static void setError(char *error, size_t len, NSString *message) {
     while (pending.count && input.readyForMoreMediaData) {
         KRItem *item = pending.firstObject;
         [pending removeObjectAtIndex:0];
-        atomic_fetch_sub(&queued, [self sizeOf:item]);
+        atomic_fetch_sub(&queued, item->cost);
         BOOL ok = item->pb ? [adaptor appendPixelBuffer:item->pb withPresentationTime:CMTimeMake(item->index, fps)] : [input appendSampleBuffer:item->sb];
         if (!ok) atomic_fetch_add(&dropped, [self sizeOf:item]);
     }
