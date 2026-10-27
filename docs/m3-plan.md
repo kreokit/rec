@@ -26,7 +26,8 @@ measuring first.
    "Needs macOS 13 or newer". **Can't be tried on the dev Mac**: built and unit-tested
    here, checked on CI macOS 14/15 as far as permissions allow there, and on a friend's
    macOS 13+ Mac (manual checklist).
-5. **Region capture.** CGDisplayStream / ScreenCaptureKit with a source rectangle, so the
+5. **Region capture.** *(Built 2026-10-27, tried with synthetic sources; the crop itself is
+   checked in step 8 on the real screen, with the user's OK.)* CGDisplayStream / ScreenCaptureKit with a source rectangle, so the
    cost stays like full screen. Choosing it: a see-through overlay on the chosen display,
    drag a rectangle, size shown, Enter/Record to confirm, Esc to cancel. Output keeps the
    region's shape, scaled to 1080p/720p at most, even sizes.
@@ -37,7 +38,8 @@ measuring first.
    option says so on 12 (or uses a region around the window) — decided by the
    measurement. When the window closes or minimises, the recording keeps going with the
    last picture and the check notes it.
-7. **Check + recovery for every track.** `check.rs` and `recovery.rs` handle camera and
+7. **Check + recovery for every track.** *(Done 2026-10-27 for the camera; computer sound
+   joins with step 4.)* `check.rs` and `recovery.rs` handle camera and
    computer sound: all tracks start together, same length (± one frame), camera slots
    without gaps, sync of every audio track against the picture; recovery cuts all tracks
    to the shortest. Pause/resume applies to every track.

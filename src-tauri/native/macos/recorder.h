@@ -71,6 +71,9 @@ void kr_rec_status(void *rec, KrRecStatus *status);
 // with a message in `error` (the files are still finished as far as possible).
 int kr_rec_stop(void *rec, KrRecStatus *status, char *error, size_t error_len);
 
+// The region overlay window (window.m): above the menu bar and the Dock. Main thread only.
+void kr_overlay_window(void *ns_window);
+
 // Permissions: 1 allowed, 0 not (yet) allowed.
 int kr_screen_access(void);
 // Asks once; on macOS 12 the answer only applies after the app restarts.

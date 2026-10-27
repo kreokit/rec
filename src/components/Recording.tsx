@@ -69,7 +69,8 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
           {formatDuration(live?.status.elapsed ?? 0)}
         </div>
         <div className="rec-meta">
-          {current.screen?.display} · {current.screen?.width} × {current.screen?.height}
+          {current.screen?.display}
+          {current.screen?.region ? " (region)" : ""} · {current.screen?.width} × {current.screen?.height}
           {current.camera ? ` · ${current.camera.name}` : ""}
           {current.mic ? ` · ${current.mic}` : " · No microphone"}
         </div>

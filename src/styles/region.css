@@ -1,0 +1,113 @@
+/* The region overlay: a see-through window over one display (RegionOverlay.tsx). */
+
+html.region-window,
+html.region-window body,
+html.region-window #root {
+  background: transparent;
+  overflow: hidden;
+}
+
+.region-overlay {
+  position: fixed;
+  inset: 0;
+  cursor: crosshair;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Flat dim: one solid colour at 55%, no blur. */
+.region-dim {
+  position: absolute;
+  background: rgb(14 14 16 / 0.55);
+  pointer-events: none;
+}
+
+.region-box {
+  position: absolute;
+  box-sizing: border-box;
+  border: 2px solid var(--color-accent);
+  cursor: move;
+}
+
+.region-box.too-small {
+  border-color: var(--color-warning);
+}
+
+.region-overlay.dragging .region-box {
+  cursor: inherit;
+}
+
+.region-grip {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--color-text);
+  border: 1px solid var(--color-bg);
+  box-sizing: border-box;
+}
+
+.region-grip-nw {
+  left: -6px;
+  top: -6px;
+  cursor: nwse-resize;
+}
+.region-grip-se {
+  right: -6px;
+  bottom: -6px;
+  cursor: nwse-resize;
+}
+.region-grip-ne {
+  right: -6px;
+  top: -6px;
+  cursor: nesw-resize;
+}
+.region-grip-sw {
+  left: -6px;
+  bottom: -6px;
+  cursor: nesw-resize;
+}
+
+.region-bar {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 320px;
+  box-sizing: border-box;
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  cursor: default;
+}
+
+.region-size {
+  flex: 1;
+  font: var(--text-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.region-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  -webkit-transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-6);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  font: var(--text-body);
+  color: var(--color-text-2);
+  pointer-events: none;
+}
+
+.region-hint strong {
+  font: var(--text-title);
+  color: var(--color-text);
+}

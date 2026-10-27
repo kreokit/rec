@@ -72,6 +72,19 @@
   align-items: start;
 }
 
+.screen-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.region-chosen {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+
 .setup-footer {
   display: flex;
   align-items: center;

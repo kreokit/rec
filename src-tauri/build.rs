@@ -14,9 +14,10 @@ fn build_macos_recorder() {
     println!("cargo:rerun-if-changed=native/macos");
     let mut build = cc::Build::new();
     build.file("native/macos/recorder.m");
+    build.file("native/macos/window.m");
+    println!("cargo:rustc-link-lib=framework=AppKit");
     if env::var_os("CARGO_FEATURE_BENCH").is_some() {
         build.file("native/macos/bench.m");
-        println!("cargo:rustc-link-lib=framework=AppKit");
     }
     build
         .flag("-fobjc-arc")

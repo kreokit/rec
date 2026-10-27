@@ -219,6 +219,7 @@ mod macos {
         fn kr_mics_json() -> *mut c_char;
         fn kr_cameras_json() -> *mut c_char;
         fn kr_free(s: *mut c_char);
+        fn kr_overlay_window(ns_window: *mut std::ffi::c_void);
         fn kr_mic_monitor_start(mic_id: *const c_char, error: *mut c_char, len: usize) -> c_int;
         fn kr_mic_monitor_peak() -> f32;
         fn kr_mic_monitor_stop();
@@ -475,6 +476,11 @@ mod macos {
 
     pub fn preview_stop() {
         unsafe { kr_camera_preview_stop() }
+    }
+
+    /// Puts the region overlay above the menu bar and the Dock. Main thread only.
+    pub fn overlay_window(ns_window: *mut std::ffi::c_void) {
+        unsafe { kr_overlay_window(ns_window) }
     }
 }
 

@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Trash2, TriangleAlert, Video } from "lucide-react";
-import { Camera, Display, Estimate, Mic as MicDevice, Options, Session, api } from "../lib/api";
+import { listen } from "@tauri-apps/api/event";
+import { Camera, Display, Estimate, Mic as MicDevice, Options, Region, Session, api } from "../lib/api";
 import { checkSummary, clockTime, formatBytes, formatDuration, formatRoom, recordingTitle } from "../lib/format";
+import { regionPixels } from "../lib/region";
 import { Button, Field, ICON_STROKE, Menu, MenuEntry, Segmented, Select, toast, useContextMenu } from "../ui";
 import { CameraPreview } from "./CameraPreview";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -12,16 +14,28 @@ import "../styles/home.css";
 const NO_MIC = "none";
 const NO_CAMERA = "none";
 
+/** The last setup, kept while the app runs: Home comes back as it was after a recording. */
+const last: {
+  displayId: string;
+  area: "display" | "region";
+  region: Region | null;
+  cameraId: string;
+  quality: "1080" | "720";
+} = { displayId: "", area: "display", region: null, cameraId: NO_CAMERA, quality: "1080" };
+
 /** Home: recover a cut-off recording, set up and start a new one, or find a recent one. */
 export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (session: Session) => void }) {
   const [displays, setDisplays] = useState<Display[]>([]);
   const [mics, setMics] = useState<MicDevice[]>([]);
-  const [displayId, setDisplayId] = useState<string>("");
+  const [displayId, setDisplayId] = useState(last.displayId);
   const [micId, setMicId] = useState<string>(NO_MIC);
   const [cameras, setCameras] = useState<Camera[]>([]);
   // Off until chosen: the camera is optional.
-  const [cameraId, setCameraId] = useState<string>(NO_CAMERA);
-  const [quality, setQuality] = useState<"1080" | "720">("1080");
+  const [cameraId, setCameraId] = useState(last.cameraId);
+  // The whole display, or part of it (dragged in the region overlay).
+  const [area, setArea] = useState(last.area);
+  const [region, setRegion] = useState(last.region);
+  const [quality, setQuality] = useState(last.quality);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [recent, setRecent] = useState<Session[] | null>(null);
   const [pending, setPending] = useState<Session[]>([]);
@@ -40,24 +54,67 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       setDisplays(displays);
       setMics(mics);
       setCameras(cameras);
-      const main = displays.find((d) => d.main) ?? displays[0];
-      if (main) setDisplayId(String(main.id));
+      // The display and camera chosen before, if they're still there.
+      if (!displays.some((d) => String(d.id) === last.displayId)) {
+        const main = displays.find((d) => d.main) ?? displays[0];
+        setDisplayId(main ? String(main.id) : "");
+        setRegion(null);
+        setArea("display");
+      }
+      if (!cameras.some((c) => c.id === last.cameraId)) setCameraId(NO_CAMERA);
       const mic = mics.find((m) => m.default) ?? mics[0];
       setMicId(micAllowed && mic ? mic.id : NO_MIC);
     }, (e) => toast(String(e), "error"));
   }, [micAllowed]);
 
+  useEffect(() => {
+    Object.assign(last, { displayId, area, region, cameraId, quality });
+  }, [displayId, area, region, cameraId, quality]);
+
   const display = displays.find((d) => String(d.id) === displayId);
   const mic = mics.find((m) => m.id === micId);
   const camera = cameras.find((c) => c.id === cameraId);
   const peak = useMonitorPeak(!!mic);
+  const chosenRegion = area === "region" ? region : null;
+  const regionSize = chosenRegion && display ? regionPixels(chosenRegion, display.width, display.points_width) : null;
+  const regionRef = useRef(region);
+  regionRef.current = region;
 
   useEffect(() => {
     if (!display) return;
     api
-      .estimate(display, null, Number(quality), camera?.width ?? 0, camera?.height ?? 0, !!mic)
+      .estimate(display, chosenRegion, Number(quality), camera?.width ?? 0, camera?.height ?? 0, !!mic)
       .then(setEstimate, () => setEstimate(null));
-  }, [display, quality, mic, camera]);
+  }, [display, chosenRegion, quality, mic, camera]);
+
+  // The overlay's answer. Cancelled without a region before: back to the whole display.
+  useEffect(() => {
+    const off = listen<Region | null>("region-chosen", ({ payload }) => {
+      if (payload) {
+        setRegion(payload);
+        setArea("region");
+      } else if (!regionRef.current) {
+        setArea("display");
+      }
+    });
+    return () => void off.then((stop) => stop());
+  }, []);
+
+  const chooseRegion = () => {
+    if (!display) return;
+    setArea("region");
+    api.regionOpen(display, region).catch((e) => {
+      toast(String(e), "error");
+      if (!region) setArea("display");
+    });
+  };
+
+  const chooseDisplay = (id: string) => {
+    setDisplayId(id);
+    // A region belongs to its display.
+    setRegion(null);
+    setArea("display");
+  };
 
   // Choosing a camera asks macOS for it the first time; if it isn't allowed, the camera
   // stays off and System Preferences opens at the right place.
@@ -100,7 +157,7 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
       camera_width: camera?.width ?? 0,
       camera_height: camera?.height ?? 0,
       display_points_width: display.points_width,
-      region: null,
+      region: chosenRegion,
     };
     setBusy(true);
     try {
@@ -177,17 +234,40 @@ export function Home({ micAllowed, onStart }: { micAllowed: boolean; onStart: (s
             Record your screen
           </h1>
           <div className="setup-grid">
-            <Field label="Screen">
-              <Select
-                label="Screen"
-                value={displayId}
-                onChange={setDisplayId}
-                options={displays.map((d) => ({
-                  value: String(d.id),
-                  label: d.name,
-                  hint: `${d.width} × ${d.height}`,
-                }))}
-              />
+            <Field
+              label="Screen"
+              hint={
+                regionSize && (
+                  <span className="region-chosen">
+                    Region {regionSize.width} × {regionSize.height}
+                    <Button variant="ghost" size="sm" onClick={chooseRegion}>
+                      Change…
+                    </Button>
+                  </span>
+                )
+              }
+            >
+              <div className="screen-choice">
+                <Select
+                  label="Screen"
+                  value={displayId}
+                  onChange={chooseDisplay}
+                  options={displays.map((d) => ({
+                    value: String(d.id),
+                    label: d.name,
+                    hint: `${d.width} × ${d.height}`,
+                  }))}
+                />
+                <Segmented
+                  label="What to record"
+                  value={area}
+                  onChange={(value) => (value === "region" ? chooseRegion() : setArea("display"))}
+                  options={[
+                    { value: "display", label: "Whole display" },
+                    { value: "region", label: "Region…" },
+                  ]}
+                />
+              </div>
             </Field>
             <Field label="Quality" hint={estimate ? `${estimate.width} × ${estimate.height}, 30 fps` : undefined}>
               <Segmented
@@ -319,6 +399,7 @@ function RecentRow({
           <span className="recent-name">{recordingTitle(session)}</span>
           <span className="recent-meta">
             {formatDuration(session.elapsed_s)} · {size}
+            {session.screen?.region ? " · Region" : ""}
             {session.camera ? " · Camera" : ""}
             {session.mic ? " · Microphone" : ""}
             {session.state === "recovered" ? " · Recovered" : ""}

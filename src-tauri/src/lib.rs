@@ -14,9 +14,9 @@ mod testpattern;
 use std::path::PathBuf;
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use native::{Access, Camera, Display, Mic};
+use native::{Access, Camera, Display, Mic, Region};
 use sessions::{Live, Options, Recordings, Session};
 
 /// Runs blocking work (the recorder, FFmpeg, file I/O) off the main thread.
@@ -217,13 +217,15 @@ async fn devices() -> Result<Devices, String> {
             displays: vec![Display {
                 id: 0,
                 name: "Test display".into(),
-                width: 2880,
-                height: 1800,
+                width: 1920,
+                height: 1200,
                 main: true,
-                x: 0.0,
-                y: 0.0,
-                points_width: 1440.0,
-                points_height: 900.0,
+                // Small and away from the corner: a test instance's region overlay covers
+                // only this part of the real screen.
+                x: 240.0,
+                y: 160.0,
+                points_width: 960.0,
+                points_height: 600.0,
             }],
             mics: vec![Mic {
                 id: "synthetic".into(),
@@ -283,6 +285,69 @@ fn estimate(
         bytes_per_minute: sessions::bytes_per_minute(w, h, camera, mic),
         free_bytes: disk::free_bytes(&root),
     }
+}
+
+/// What the region overlay needs: the display (points and pixels) and the region chosen
+/// before, if any (window.__KREOKIT_REGION__ in the overlay).
+#[derive(Serialize)]
+struct RegionSetup<'a> {
+    display: &'a Display,
+    region: Option<Region>,
+}
+
+/// Opens the see-through overlay over `display` to drag a region; the answer comes back to
+/// the main window as the "region-chosen" event (`region_done`).
+#[tauri::command]
+async fn region_open(
+    app: AppHandle,
+    display: Display,
+    region: Option<Region>,
+) -> Result<(), String> {
+    if let Some(open) = app.get_webview_window("region") {
+        let _ = open.destroy();
+    }
+    let setup = serde_json::to_string(&RegionSetup {
+        display: &display,
+        region,
+    })
+    .map_err(|e| e.to_string())?;
+    let window = WebviewWindowBuilder::new(&app, "region", WebviewUrl::App("index.html".into()))
+        .title("Choose a region")
+        .initialization_script(format!("window.__KREOKIT_REGION__ = {setup};"))
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .position(display.x, display.y)
+        .inner_size(display.points_width, display.points_height)
+        .build()
+        .map_err(|e| {
+            format!("The region can't be chosen ({e}). Try again, or record the whole display.")
+        })?;
+    #[cfg(target_os = "macos")]
+    {
+        let ns_window = window.ns_window().map_err(|e| e.to_string())? as usize;
+        window
+            .run_on_main_thread(move || native::overlay_window(ns_window as *mut _))
+            .map_err(|e| e.to_string())?;
+    }
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The overlay's answer: the region, or `None` when cancelled.
+#[tauri::command]
+fn region_done(app: AppHandle, region: Option<Region>) -> Result<(), String> {
+    app.emit_to("main", "region-chosen", region)
+        .map_err(|e| e.to_string())?;
+    if let Some(window) = app.get_webview_window("region") {
+        window.destroy().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -475,6 +540,8 @@ pub fn run() {
             camera_preview_start,
             camera_preview_frame,
             camera_preview_stop,
+            region_open,
+            region_done,
             start_recording,
             pause_recording,
             resume_recording,

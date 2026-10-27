@@ -1,9 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
+  "description": "Capability for the main window and the region overlay",
   "windows": [
-    "main"
+    "main",
+    "region"
   ],
   "permissions": [
     "core:default",

@@ -166,6 +166,10 @@ export const api = {
   /** The newest picture after `after`: its number (8 bytes, little-endian) + JPEG; empty if none. */
   cameraPreviewFrame: (after: number) => invoke<ArrayBuffer>("camera_preview_frame", { after }),
   cameraPreviewStop: () => invoke<void>("camera_preview_stop"),
+  /** Opens the overlay to drag a region on `display`; the answer arrives as "region-chosen". */
+  regionOpen: (display: Display, region: Region | null) => invoke<void>("region_open", { display, region }),
+  /** From the overlay: the chosen region, or null when cancelled. */
+  regionDone: (region: Region | null) => invoke<void>("region_done", { region }),
   startRecording: (options: Options) => invoke<Session>("start_recording", { options }),
   pauseRecording: () => invoke<Session>("pause_recording"),
   resumeRecording: () => invoke<Session>("resume_recording"),
