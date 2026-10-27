@@ -1,0 +1,68 @@
+/* The camera bubble while recording: a round see-through window (CameraBubble.tsx). */
+
+html.bubble-window,
+html.bubble-window body,
+html.bubble-window #root {
+  background: transparent;
+  overflow: hidden;
+}
+
+.bubble {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 50%;
+  background: var(--color-stage);
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.bubble img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Like a mirror; the recording isn't mirrored. */
+  transform: scaleX(-1);
+  pointer-events: none;
+}
+
+.bubble-wait {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: var(--text-meta);
+  color: var(--color-text-3);
+}
+
+.bubble-tools {
+  position: absolute;
+  left: 50%;
+  bottom: 18%;
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-1);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  transform: translateX(-50%);
+}
+
+.bubble-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: 600 12px/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.bubble-tool:hover {
+  background: var(--color-surface-3);
+}

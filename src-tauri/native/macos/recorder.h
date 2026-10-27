@@ -99,6 +99,10 @@ int kr_rec_stop(void *rec, KrRecStatus *status, char *error, size_t error_len);
 // How many of the app's own windows (KrRecConfig.exclude_windows) the screen stream keeps out
 // of the picture; 0 when they would be recorded (CGDisplayStream, or none was given).
 int kr_rec_kept_out(void *rec);
+// The bubble while recording: small JPEGs (`width` wide) of the recorded camera, about 15 a
+// second, read with kr_camera_preview_frame (replaces any setup-screen preview). Ends with
+// the recording. -1 without a camera.
+int kr_rec_preview(void *rec, int width);
 
 int kr_system_audio_supported(void);
 int kr_window_capture_supported(void);

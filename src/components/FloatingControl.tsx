@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { Pause, Play, Square, X } from "lucide-react";
 import { Live, api } from "../lib/api";
 import { formatDuration } from "../lib/format";
+import { useHandDrag } from "../lib/handDrag";
 import { ICON_STROKE, toast } from "../ui";
 import { LevelMeter } from "./LevelMeter";
 import "../styles/control.css";
@@ -34,32 +35,7 @@ export function FloatingControl() {
       setStopping(false);
     });
 
-  // Dragged by its background: the window moves by how far the pointer went on screen.
-  const drag = useRef<{ x: number; y: number } | null>(null);
-  const pending = useRef({ dx: 0, dy: 0, queued: false });
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0 || (e.target as Element).closest("button")) return;
-    (e.currentTarget as Element).setPointerCapture(e.pointerId);
-    drag.current = { x: e.screenX, y: e.screenY };
-  };
-  const onPointerMove = (e: React.PointerEvent) => {
-    const from = drag.current;
-    if (!from) return;
-    const p = pending.current;
-    p.dx += e.screenX - from.x;
-    p.dy += e.screenY - from.y;
-    drag.current = { x: e.screenX, y: e.screenY };
-    if (p.queued) return;
-    p.queued = true;
-    requestAnimationFrame(() => {
-      const { dx, dy } = p;
-      Object.assign(p, { dx: 0, dy: 0, queued: false });
-      if (dx || dy) void api.controlMove(dx, dy);
-    });
-  };
-  const onPointerUp = () => {
-    drag.current = null;
-  };
+  const drag = useHandDrag("control");
 
   const stop = run(async () => {
     setStopping(true);
@@ -68,13 +44,7 @@ export function FloatingControl() {
   });
 
   return (
-    <div
-      className="control"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-    >
+    <div className="control" {...drag}>
       <span className={paused || counting ? "control-dot paused" : "control-dot"} aria-hidden />
       <span className="control-time">
         {stopping ? "Finishing…" : counting ? "Starting…" : formatDuration(live?.status.elapsed ?? 0)}

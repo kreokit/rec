@@ -30,7 +30,8 @@ impl Publisher {
 
 struct Running {
     stop: Arc<AtomicBool>,
-    thread: JoinHandle<()>,
+    /// `None` for the recorder's tap (the recorder publishes; nothing to stop here).
+    thread: Option<JoinHandle<()>>,
     latest: Publisher,
 }
 
@@ -53,7 +54,7 @@ pub fn start(
         Ok(Ok(())) => {
             *PREVIEW.lock().unwrap() = Some(Running {
                 stop,
-                thread,
+                thread: Some(thread),
                 latest,
             });
             Ok(())
@@ -85,8 +86,23 @@ pub fn stop() {
     let running = PREVIEW.lock().unwrap().take();
     if let Some(r) = running {
         r.stop.store(true, Ordering::Relaxed);
-        let _ = r.thread.join();
+        if let Some(thread) = r.thread {
+            let _ = thread.join();
+        }
     }
+}
+
+/// The bubble while recording: replaces any preview with one the recorder publishes to
+/// (`Core::set_preview`), read with [`frame`] as usual.
+pub fn tap() -> Publisher {
+    stop();
+    let latest = Publisher::default();
+    *PREVIEW.lock().unwrap() = Some(Running {
+        stop: Arc::new(AtomicBool::new(false)),
+        thread: None,
+        latest: latest.clone(),
+    });
+    latest
 }
 
 /// The made-up camera: the test pattern, counting up.

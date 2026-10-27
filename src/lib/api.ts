@@ -348,8 +348,12 @@ export const api = {
   /** Esc during the countdown: nothing is kept ("recording-cancelled" goes to the main window). */
   countdownCancel: () => invoke<void>("countdown_cancel"),
   countdownPref: () => invoke<boolean>("countdown_pref"),
-  /** Moves the floating control by (dx, dy) points (it is dragged by hand, see FloatingControl). */
-  controlMove: (dx: number, dy: number) => invoke<void>("control_move", { dx, dy }),
+  /** Moves a floating window by (dx, dy) points (dragged by hand, lib/handDrag.ts). */
+  floatingMove: (label: "control" | "bubble", dx: number, dy: number) =>
+    invoke<void>("floating_move", { label, dx, dy }),
+  bubbleResize: (size: "small" | "medium" | "large") => invoke<void>("bubble_resize", { size }),
+  /** Hides the bubble for the rest of the recording (the camera keeps recording). */
+  bubbleHide: () => invoke<void>("bubble_hide"),
   setCountdownPref: (on: boolean) => invoke<void>("set_countdown_pref", { on }),
   pauseRecording: () => invoke<Session>("pause_recording"),
   resumeRecording: () => invoke<Session>("resume_recording"),

@@ -257,6 +257,7 @@ mod macos {
         fn kr_rec_resume(rec: *mut c_void);
         fn kr_rec_status(rec: *mut c_void, status: *mut KrRecStatus);
         fn kr_rec_kept_out(rec: *mut c_void) -> c_int;
+        fn kr_rec_preview(rec: *mut c_void, width: c_int) -> c_int;
         fn kr_rec_stop(
             rec: *mut c_void,
             status: *mut KrRecStatus,
@@ -412,6 +413,12 @@ mod macos {
         /// Whether the app's own windows are kept out of the screen picture.
         pub fn own_windows_kept_out(&self) -> bool {
             unsafe { kr_rec_kept_out(self.0) > 0 }
+        }
+
+        /// Small JPEGs of the recorded camera (`width` wide, about 15 a second) for the
+        /// bubble, read with `preview_frame`; false without a camera.
+        pub fn preview(&self, width: u32) -> bool {
+            unsafe { kr_rec_preview(self.0, width as c_int) == 0 }
         }
 
         /// Stops and finishes the files. The error (a source or file failed during the
@@ -616,7 +623,8 @@ mod portable {
     use crate::pipeline::{self, Core, Inputs};
 
     /// A running recording. Dropping it without [`Recorder::stop`] stops it too.
-    pub struct Recorder(pipeline::Recorder, bool);
+    /// The running recorder, whether the app's own windows are kept out, the camera's size.
+    pub struct Recorder(pipeline::Recorder, bool, Option<(u32, u32)>);
 
     impl Recorder {
         pub fn start(config: &RecordConfig) -> Result<Recorder, String> {
@@ -640,6 +648,7 @@ mod portable {
             Ok(Recorder(
                 pipeline::Recorder::new(core, vec![Box::new(generator)], pictures),
                 kept_out(config),
+                camera_size(config),
             ))
         }
 
@@ -661,6 +670,19 @@ mod portable {
             self.1
         }
 
+        /// Small JPEGs of the recorded camera (`width` wide, about 15 a second) for the
+        /// bubble, read with `preview_frame`; false without a camera.
+        pub fn preview(&self, width: u32) -> bool {
+            let Some((w, h)) = self.2 else {
+                return false;
+            };
+            let height = ((width as u64 * h as u64 / w.max(1) as u64) as u32 & !1).max(2);
+            self.0
+                .core()
+                .set_preview(crate::preview::tap(), width, height);
+            true
+        }
+
         /// Stops and finishes the files. The error (a source or file failed during the
         /// recording) comes with the final status: the files are kept either way.
         pub fn stop(self) -> (Status, Option<String>) {
@@ -676,6 +698,7 @@ mod portable {
         Ok(Recorder(
             pipeline::Recorder::new(core, sources, pictures),
             kept_out(config),
+            camera_size(config),
         ))
     }
 
@@ -686,7 +709,12 @@ mod portable {
         Ok(Recorder(
             pipeline::Recorder::new(core, sources, pictures),
             kept_out(config),
+            camera_size(config),
         ))
+    }
+
+    fn camera_size(config: &RecordConfig) -> Option<(u32, u32)> {
+        config.camera.as_ref().map(|c| (c.width, c.height))
     }
 
     fn kept_out(config: &RecordConfig) -> bool {
@@ -877,6 +905,42 @@ pub(crate) mod tests {
                 .all(|c| c.width > 0 && c.height > 0 && c.height <= 720 && !c.id.is_empty())
         );
         assert!(cameras.iter().filter(|c| c.default).count() <= 1);
+    }
+
+    /// The bubble's pictures come from the recorder's own camera, and end with it. (With the
+    /// `pipe-recorder` feature on macOS the Rust recorder publishes where macOS's
+    /// `preview_frame` doesn't read: Windows and Linux run this test.)
+    #[test]
+    #[cfg(not(all(target_os = "macos", feature = "pipe-recorder")))]
+    fn the_bubble_shows_the_recorded_camera() {
+        let _timing = alone();
+        let dir = temp_dir("bubble");
+        let mut config = synthetic(dir.clone(), 640, 360, false);
+        config.synthetic = Some(Synthetic::default()); // real time
+        let rec = Recorder::start(&config).unwrap();
+        assert!(rec.preview(320));
+        let mut seq = 0;
+        let mut pictures = 0;
+        let start = std::time::Instant::now();
+        while start.elapsed().as_millis() < 1500 {
+            if let Some(jpeg) = preview_frame(&mut seq) {
+                assert_eq!(&jpeg[..2], &[0xFF, 0xD8], "a JPEG");
+                pictures += 1;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // About 15 a second (CI VMs draw Core Image JPEGs in software, more slowly).
+        assert!(pictures >= if on_ci() { 4 } else { 10 }, "{pictures}");
+        let (_, error) = rec.stop();
+        assert_eq!(error, None);
+        assert_eq!(preview_frame(&mut seq), None, "ends with the recording");
+
+        // Without a camera there is nothing to show.
+        let mut config = synthetic(temp_dir("bubble-none"), 640, 360, false);
+        config.camera = None;
+        let rec = Recorder::start(&config).unwrap();
+        assert!(!rec.preview(320));
+        let _ = rec.stop();
     }
 
     #[test]

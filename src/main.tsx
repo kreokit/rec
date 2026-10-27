@@ -5,6 +5,7 @@ import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/shell.css";
 import App from "./App";
+import { CameraBubble } from "./components/CameraBubble";
 import { Countdown } from "./components/Countdown";
 import { FloatingControl } from "./components/FloatingControl";
 import { PatternSetup, PatternWindow } from "./components/PatternWindow";
@@ -21,6 +22,8 @@ declare global {
     __KREOKIT_COUNTDOWN__?: boolean;
     /** Set in the floating control's window only (control_open in lib.rs). */
     __KREOKIT_CONTROL__?: boolean;
+    /** Set in the camera bubble's window only (bubble_open in lib.rs). */
+    __KREOKIT_BUBBLE__?: boolean;
   }
 }
 
@@ -35,6 +38,8 @@ const countdown = window.__KREOKIT_COUNTDOWN__;
 if (countdown) document.documentElement.classList.add("countdown-window");
 const control = window.__KREOKIT_CONTROL__;
 if (control) document.documentElement.classList.add("control-window");
+const bubble = window.__KREOKIT_BUBBLE__;
+if (bubble) document.documentElement.classList.add("bubble-window");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -46,6 +51,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <Countdown />
     ) : control ? (
       <FloatingControl />
+    ) : bubble ? (
+      <CameraBubble />
     ) : (
       <App />
     )}

@@ -233,6 +233,10 @@ pub trait Capture: Send + Sync {
     fn own_windows_kept_out(&self) -> bool {
         false
     }
+    /// Small pictures of the recorded camera for the bubble (`width` wide); false without.
+    fn camera_preview(&self, _width: u32) -> bool {
+        false
+    }
 }
 
 pub trait Backend: Send + Sync {
@@ -256,6 +260,9 @@ impl Capture for crate::native::Recorder {
     }
     fn own_windows_kept_out(&self) -> bool {
         crate::native::Recorder::own_windows_kept_out(self)
+    }
+    fn camera_preview(&self, width: u32) -> bool {
+        crate::native::Recorder::preview(self, width)
     }
 }
 
@@ -588,6 +595,15 @@ impl Recordings {
                 a.session.state = State::Recording;
             }
         })
+    }
+
+    /// The bubble's pictures: small JPEGs of the recorded camera (`width` wide).
+    pub fn camera_preview(&self, width: u32) -> bool {
+        self.active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|a| a.capture.camera_preview(width))
     }
 
     /// The countdown is over: the recording starts now.

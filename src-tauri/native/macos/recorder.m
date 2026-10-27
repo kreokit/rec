@@ -353,12 +353,22 @@ static NSDictionary *floatMonoSettings(void) {
 
 // ---------------------------------------------------------------------------------------
 
+@class KRPreview;
+// Hands a camera picture to the preview tap (the bubble while recording), off the capture
+// queue; skipped while the previous one is still being made.
+static void tapPicture(KRPreview *tap, CVPixelBufferRef pb);
+@class KRRecorder;
+// Ends the tap (before the recording stops).
+static void stopTap(KRRecorder *rec);
+
 @interface KRRecorder : NSObject <AVCaptureAudioDataOutputSampleBufferDelegate, AVCaptureVideoDataOutputSampleBufferDelegate> {
   @public
     KrRecConfig cfg;
     NSString *dir, *micId, *cameraId;
     NSArray<NSNumber *> *excludeIds; // cfg.exclude_windows
     int keptOut;                      // windows the screen stream keeps out
+    KRPreview *tap;                   // kr_rec_preview: small pictures of the recorded camera
+    double tapLast;
     dispatch_queue_t q;
     double t0;
     double pausedTotal, pauseStart; // pauseStart < 0: not paused
@@ -530,6 +540,11 @@ static SCShareableContent *shareableContent(BOOL onScreenOnly) API_AVAILABLE(mac
 
 - (void)ingest:(CVPixelBufferRef)pb at:(double)t into:(KRPacer *)p {
     if (!p) return;
+    // About 15 a second for the bubble (the same pictures the camera track gets).
+    if (p == cameraP && tap && t - tapLast >= 1.0 / 15) {
+        tapLast = t;
+        tapPicture(tap, pb);
+    }
     if (t < p->lastBoundary - kTie) {
         p->late++;
         if (p->current && t <= p->current->t) return;
@@ -1356,6 +1371,7 @@ void kr_rec_status(void *p, KrRecStatus *status) {
 int kr_rec_stop(void *p, KrRecStatus *status, char *error, size_t error_len) {
     @autoreleasepool {
         KRRecorder *rec = CFBridgingRelease(p);
+        stopTap(rec);
         dispatch_sync(rec->q, ^{
             double now = [rec now];
             rec->stopAt = MAX(rec->t0, rec->pauseStart >= 0 ? rec->pauseStart : now);
@@ -1635,6 +1651,8 @@ void kr_mic_monitor_stop(void) {
     int64_t count;
     NSData *jpeg; // the newest picture, under gPreviewLock
     uint64_t seq;
+    int width;          // the recorder's tap: pictures scaled to this width
+    atomic_bool busy;   // the recorder's tap: a picture is being made
 }
 @end
 
@@ -1646,6 +1664,10 @@ static KRPreview *gPreview;
     static CGColorSpaceRef srgb;
     if (!srgb) srgb = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
     CIImage *image = [CIImage imageWithCVPixelBuffer:pb];
+    if (width > 0 && image.extent.size.width > width) {
+        CGFloat k = width / image.extent.size.width;
+        image = [image imageByApplyingTransform:CGAffineTransformMakeScale(k, k)];
+    }
     NSData *data = [context JPEGRepresentationOfImage:image colorSpace:srgb options:@{(id)kCGImageDestinationLossyCompressionQuality : @0.7}];
     if (!data) return;
     pthread_mutex_lock(&gPreviewLock);
@@ -1665,6 +1687,47 @@ static KRPreview *gPreview;
     if (synthPool) CVPixelBufferPoolRelease(synthPool);
 }
 @end
+
+static void tapPicture(KRPreview *tap, CVPixelBufferRef pb) {
+    bool idle = false;
+    if (!atomic_compare_exchange_strong(&tap->busy, &idle, true)) return;
+    CVPixelBufferRetain(pb);
+    dispatch_async(tap->queue, ^{
+        [tap take:pb];
+        CVPixelBufferRelease(pb);
+        atomic_store(&tap->busy, false);
+    });
+}
+
+int kr_rec_preview(void *recorder, int width) {
+    KRRecorder *rec = (__bridge KRRecorder *)recorder;
+    if (!rec->cfg.camera) return -1;
+    kr_camera_preview_stop();
+    KRPreview *p = [KRPreview new];
+    p->queue = dispatch_queue_create("kreokit.rec.preview-tap", DISPATCH_QUEUE_SERIAL);
+    p->context = [CIContext contextWithOptions:nil];
+    p->width = width;
+    pthread_mutex_lock(&gPreviewLock);
+    gPreview = p;
+    pthread_mutex_unlock(&gPreviewLock);
+    dispatch_sync(rec->q, ^{
+        rec->tap = p;
+    });
+    return 0;
+}
+
+static void stopTap(KRRecorder *rec) {
+    __block KRPreview *t = nil;
+    dispatch_sync(rec->q, ^{
+        t = rec->tap;
+        rec->tap = nil;
+    });
+    if (!t) return;
+    pthread_mutex_lock(&gPreviewLock);
+    if (gPreview == t) gPreview = nil;
+    pthread_mutex_unlock(&gPreviewLock);
+    dispatch_sync(t->queue, ^{});
+}
 
 int kr_camera_preview_start(const char *camera_id, int width, int height, int synthetic, char *error, size_t error_len) {
     kr_camera_preview_stop();

@@ -172,6 +172,9 @@ pub struct Inputs {
 /// The shared state of one recording; sources hold it and hand their media in.
 pub struct Core {
     state: Mutex<State>,
+    /// The bubble while recording (`set_preview`): where small JPEGs of the camera go, their
+    /// size, and the last one's time.
+    preview: Mutex<Option<(crate::preview::Publisher, u32, u32, f64)>>,
     /// The synthetic sources' own clock (synthetic `fast`), as f64 bits.
     fast: bool,
     synth_now: AtomicU64,
@@ -254,6 +257,7 @@ impl Core {
         let now = host_seconds();
         let fast = config.synthetic.is_some_and(|s| s.fast);
         Ok(Arc::new(Core {
+            preview: Mutex::new(None),
             state: Mutex::new(State {
                 t0: now + 0.5,
                 fps,
@@ -324,12 +328,31 @@ impl Core {
     }
 
     pub fn camera(&self, picture: Arc<Picture>, t: f64) {
+        // About 15 a second for the bubble: the pictures the camera track gets.
+        let tap = {
+            let mut preview = self.preview.lock().unwrap();
+            match preview.as_mut() {
+                Some((publisher, w, h, last)) if t - *last >= 1.0 / 15.0 => {
+                    *last = t;
+                    Some((publisher.clone(), *w, *h))
+                }
+                _ => None,
+            }
+        };
+        if let Some((publisher, w, h)) = tap {
+            publisher.publish(crate::preview::jpeg(&picture, w, h));
+        }
         let mut s = self.lock();
         let st = &mut *s;
         if let Some(p) = st.camera.as_mut() {
             let nb = next_boundary(st.t0, st.fps, st.paused_total, st.pause_start, p);
             ingest(p, picture, t, nb);
         }
+    }
+
+    /// Small JPEGs of the recorded camera from now on, `width` × `height`, into `publisher`.
+    pub fn set_preview(&self, publisher: crate::preview::Publisher, width: u32, height: u32) {
+        *self.preview.lock().unwrap() = Some((publisher, width, height, f64::NEG_INFINITY));
     }
 
     /// Pictures the camera dropped before they reached us.
@@ -720,6 +743,10 @@ pub struct Recorder {
 }
 
 impl Recorder {
+    pub fn core(&self) -> &Arc<Core> {
+        &self.core
+    }
+
     /// Starts the pacer (real time) and the 2-second fsync around a core whose sources run.
     pub fn new(core: Arc<Core>, sources: Vec<Box<dyn Source>>, pictures: bool) -> Recorder {
         let running = Arc::new(AtomicBool::new(true));

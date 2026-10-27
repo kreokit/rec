@@ -12,17 +12,14 @@ const inOrder = <T,>(work: () => Promise<T>): Promise<T> => {
 };
 
 /**
- * The chosen camera, live (about 15 pictures a second, mirrored like a mirror; the
- * recording keeps the camera's own orientation).
+ * The newest preview picture (a blob URL) while `active`: the setup screen's preview, or the
+ * recorder's own camera pictures for the bubble while recording.
  */
-export function CameraPreview({ camera }: { camera: Camera | undefined }) {
+export function usePreviewPictures(active: boolean): string | null {
   const [src, setSrc] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
   useEffect(() => {
     setSrc(null);
-    setError(null);
-    if (!camera) return;
+    if (!active) return;
     let live = true;
     let seq = 0;
     let url: string | null = null;
@@ -42,17 +39,39 @@ export function CameraPreview({ camera }: { camera: Camera | undefined }) {
       }
       if (live) timer = window.setTimeout(() => void poll(), 60);
     };
-    inOrder(() => api.cameraPreviewStart(camera.id, camera.width, camera.height)).then(
-      () => live && void poll(),
-      (e) => live && setError(String(e)),
-    );
+    void poll();
     return () => {
       live = false;
       window.clearTimeout(timer);
       if (url) URL.revokeObjectURL(url);
+    };
+  }, [active]);
+  return src;
+}
+
+/**
+ * The chosen camera, live (about 15 pictures a second, mirrored like a mirror; the
+ * recording keeps the camera's own orientation).
+ */
+export function CameraPreview({ camera }: { camera: Camera | undefined }) {
+  const [started, setStarted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setError(null);
+    if (!camera) return;
+    let live = true;
+    inOrder(() => api.cameraPreviewStart(camera.id, camera.width, camera.height)).then(
+      () => live && setStarted(true),
+      (e) => live && setError(String(e)),
+    );
+    return () => {
+      live = false;
+      setStarted(false);
       void inOrder(() => api.cameraPreviewStop());
     };
   }, [camera]);
+  const src = usePreviewPictures(started);
 
   return (
     <div

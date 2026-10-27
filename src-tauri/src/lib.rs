@@ -615,9 +615,12 @@ fn camera_preview_frame(after: u64) -> tauri::ipc::Response {
 }
 
 #[tauri::command]
-async fn camera_preview_stop() -> Result<(), String> {
-    blocking(|| {
-        native::preview_stop();
+async fn camera_preview_stop(app: AppHandle) -> Result<(), String> {
+    blocking(move || {
+        // While recording the bubble reads the recorder's own pictures; they end with it.
+        if !recordings(&app).is_recording() {
+            native::preview_stop();
+        }
         Ok(())
     })
     .await
@@ -719,32 +722,24 @@ fn countdown_open(
     Ok(())
 }
 
-/// The display the floating control is on while recording.
-static CONTROL_ON: std::sync::Mutex<Option<Display>> = std::sync::Mutex::new(None);
+/// The display each floating window ("control", "bubble") is on while recording.
+static FLOATING_ON: std::sync::Mutex<Vec<(&'static str, Display)>> =
+    std::sync::Mutex::new(Vec::new());
 
-/// Opens the floating control (time, pause, stop, mic level) where `floating.rs` says;
-/// false when it would be recorded (the menu bar or tray take its place).
-fn control_open(app: &AppHandle, options: &Options) -> Result<bool, String> {
-    control_close(app);
-    let displays = display_list();
-    let kept_out = exclusion_available();
-    let Some(display) = floating::control_display(
-        &displays,
-        options.display_id,
-        options.window.is_some(),
-        kept_out,
-    ) else {
-        return Ok(false);
-    };
-    let saved = read_prefs(app)
-        .control_positions
-        .get(&display.id.to_string())
-        .copied();
-    let (x, y) = floating::control_position(display, saved);
-    let (w, h) = floating::CONTROL_SIZE;
-    let window = WebviewWindowBuilder::new(app, "control", WebviewUrl::App("index.html".into()))
+/// Opens a floating window (`label`, its page chosen by `flag`) at (x, y) points: above
+/// other windows, on every Space, and on macOS a non-activating panel, so clicking it leaves
+/// the keyboard with the app being recorded (docs/m5-results.md).
+fn floating_open(
+    app: &AppHandle,
+    label: &'static str,
+    flag: &str,
+    display: &Display,
+    (x, y, w, h): (f64, f64, f64, f64),
+) -> Result<(), String> {
+    floating_close(app, label);
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
         .title("KreoKit Rec")
-        .initialization_script("window.__KREOKIT_CONTROL__ = true;")
+        .initialization_script(format!("window.{flag} = true;"))
         .decorations(false)
         .transparent(true)
         .shadow(false)
@@ -752,7 +747,6 @@ fn control_open(app: &AppHandle, options: &Options) -> Result<bool, String> {
         .always_on_top(true)
         .visible_on_all_workspaces(true)
         .skip_taskbar(true)
-        // Clicking it must not take the keyboard from the app being recorded.
         .focusable(false)
         .focused(false)
         .accept_first_mouse(true)
@@ -769,46 +763,27 @@ fn control_open(app: &AppHandle, options: &Options) -> Result<bool, String> {
             .map_err(|e| e.to_string())?;
     }
     window.show().map_err(|e| e.to_string())?;
-    *CONTROL_ON.lock().unwrap() = Some(display.clone());
-    Ok(true)
+    FLOATING_ON.lock().unwrap().push((label, display.clone()));
+    Ok(())
 }
 
-/// Moves the floating control by (dx, dy) points (dragged by its background: the panel
-/// never becomes the key window, so the system's own window drag doesn't start).
-#[tauri::command]
-fn control_move(app: AppHandle, dx: f64, dy: f64) -> Result<(), String> {
-    let window = app
-        .get_webview_window("control")
-        .ok_or("The recording controls are closed.")?;
-    let scale = window.scale_factor().map_err(|e| e.to_string())?;
-    let at = window
-        .outer_position()
-        .map_err(|e| e.to_string())?
-        .to_logical::<f64>(scale);
-    window
-        .set_position(tauri::LogicalPosition::new(at.x + dx, at.y + dy))
-        .map_err(|e| e.to_string())
-}
-
-/// Closes the floating control and remembers where it was left on its display.
-fn control_close(app: &AppHandle) {
-    let Some(window) = app.get_webview_window("control") else {
-        return;
+/// Closes a floating window; returns its display and where it was left on it (points
+/// from the display's top-left) to remember.
+fn floating_close(app: &AppHandle, label: &str) -> Option<(Display, (f64, f64))> {
+    let window = app.get_webview_window(label)?;
+    let display = {
+        let mut on = FLOATING_ON.lock().unwrap();
+        let i = on.iter().position(|(l, _)| *l == label);
+        i.map(|i| on.remove(i).1)
     };
-    let display = CONTROL_ON.lock().unwrap().take();
-    if let (Some(display), Ok(at), Ok(scale)) =
-        (display, window.outer_position(), window.scale_factor())
-    {
-        let at = at.to_logical::<f64>(scale);
-        let _ = write_prefs(
-            app,
-            |p| {
-                p.control_positions
-                    .insert(display.id.to_string(), (at.x - display.x, at.y - display.y));
-            },
-            "Where the recording controls were left couldn't be remembered",
-        );
-    }
+    let place = match (display, window.outer_position(), window.scale_factor()) {
+        (Some(display), Ok(at), Ok(scale)) => {
+            let at = at.to_logical::<f64>(scale);
+            let offset = (at.x - display.x, at.y - display.y);
+            Some((display, offset))
+        }
+        _ => None,
+    };
     #[cfg(target_os = "macos")]
     if let Ok(ns_window) = window.ns_window() {
         // Back to the window library's own class before it closes the window.
@@ -821,6 +796,143 @@ fn control_close(app: &AppHandle) {
         let _ = rx.recv_timeout(std::time::Duration::from_secs(2));
     }
     let _ = window.destroy();
+    place
+}
+
+/// Moves a floating window by (dx, dy) points: dragged by hand (FloatingControl,
+/// CameraBubble), as a panel that never becomes key doesn't start the system's own drag.
+#[tauri::command]
+fn floating_move(app: AppHandle, label: String, dx: f64, dy: f64) -> Result<(), String> {
+    if label != "control" && label != "bubble" {
+        return Err("Only the recording controls can be moved.".into());
+    }
+    let window = app
+        .get_webview_window(&label)
+        .ok_or("The recording controls are closed.")?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let at = window
+        .outer_position()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale);
+    window
+        .set_position(tauri::LogicalPosition::new(at.x + dx, at.y + dy))
+        .map_err(|e| e.to_string())
+}
+
+/// Opens the floating control (time, pause, stop, mic level) where `floating.rs` says;
+/// false when it would be recorded (the menu bar or tray take its place).
+fn control_open(app: &AppHandle, options: &Options) -> Result<bool, String> {
+    let displays = display_list();
+    let Some(display) = floating::control_display(
+        &displays,
+        options.display_id,
+        options.window.is_some(),
+        exclusion_available(),
+    ) else {
+        return Ok(false);
+    };
+    let saved = read_prefs(app)
+        .control_positions
+        .get(&display.id.to_string())
+        .copied();
+    let (x, y) = floating::control_position(display, saved);
+    let (w, h) = floating::CONTROL_SIZE;
+    floating_open(app, "control", "__KREOKIT_CONTROL__", display, (x, y, w, h))?;
+    Ok(true)
+}
+
+/// Closes the floating control and remembers where it was left on its display.
+fn control_close(app: &AppHandle) {
+    if let Some((display, at)) = floating_close(app, "control") {
+        let _ = write_prefs(
+            app,
+            |p| {
+                p.control_positions.insert(display.id.to_string(), at);
+            },
+            "Where the recording controls were left couldn't be remembered",
+        );
+    }
+}
+
+/// Opens the camera bubble while recording a camera, where it is kept out of the picture;
+/// false otherwise. Its pictures come from the recorder (`camera_preview`).
+fn bubble_open(app: &AppHandle, options: &Options) -> Result<bool, String> {
+    if options.camera_id.is_none() {
+        return Ok(false);
+    }
+    let displays = display_list();
+    let Some(display) = floating::bubble_display(
+        &displays,
+        options.display_id,
+        options.window.is_some(),
+        exclusion_available(),
+    ) else {
+        return Ok(false);
+    };
+    let prefs = read_prefs(app);
+    let size = floating::bubble_size(prefs.bubble_size.as_deref().unwrap_or("medium"));
+    let saved = prefs.bubble_positions.get(&display.id.to_string()).copied();
+    let (x, y) = floating::bubble_position(display, saved, size);
+    floating_open(
+        app,
+        "bubble",
+        "__KREOKIT_BUBBLE__",
+        display,
+        (x, y, size, size),
+    )?;
+    Ok(true)
+}
+
+fn bubble_close(app: &AppHandle) {
+    if let Some((display, at)) = floating_close(app, "bubble") {
+        let _ = write_prefs(
+            app,
+            |p| {
+                p.bubble_positions.insert(display.id.to_string(), at);
+            },
+            "Where the camera bubble was left couldn't be remembered",
+        );
+    }
+}
+
+/// Small, Medium or Large; the bubble keeps its bottom-right corner, and the size is
+/// remembered.
+#[tauri::command]
+fn bubble_resize(app: AppHandle, size: String) -> Result<(), String> {
+    let window = app
+        .get_webview_window("bubble")
+        .ok_or("The camera bubble is closed.")?;
+    let scale = window.scale_factor().map_err(|e| e.to_string())?;
+    let at = window
+        .outer_position()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale);
+    let old = window
+        .inner_size()
+        .map_err(|e| e.to_string())?
+        .to_logical::<f64>(scale)
+        .width;
+    let new = floating::bubble_size(&size);
+    window
+        .set_size(tauri::LogicalSize::new(new, new))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::LogicalPosition::new(
+            at.x + old - new,
+            at.y + old - new,
+        ))
+        .map_err(|e| e.to_string())?;
+    write_prefs(
+        &app,
+        |p| p.bubble_size = Some(size),
+        "The bubble's size couldn't be remembered",
+    )
+}
+
+/// Hides the camera bubble for the rest of this recording (the camera keeps recording).
+#[tauri::command]
+fn bubble_hide(app: AppHandle) {
+    bubble_close(&app);
 }
 
 /// The menu bar item (macOS) or tray icon (Windows, Linux) while recording where the
@@ -1000,14 +1112,17 @@ async fn start_recording(
         let display = display.ok_or("Choose a display, then record again.")?;
         countdown_open(&app, &display, options.region)?;
     }
-    let control = match control_open(&app, &options) {
+    let (control, bubble) = match control_open(&app, &options)
+        .and_then(|control| Ok((control, bubble_open(&app, &options)?)))
+    {
         Ok(shown) => shown,
         Err(e) => {
             countdown_close(&app);
+            control_close(&app);
             return Err(e);
         }
     };
-    if options.countdown || control {
+    if options.countdown || control || bubble {
         // On screen before the recorder looks at which of the app's windows are shown.
         wait_ms(std::time::Duration::from_millis(150)).await;
     }
@@ -1026,12 +1141,18 @@ async fn start_recording(
         let app2 = app.clone();
         let _ = blocking(move || recordings(&app2).cancel()).await;
         control_close(&app);
+        bubble_close(&app);
         own_windows(&app, false);
         return Err(COUNTDOWN_CANCELLED.into());
+    }
+    if bubble && started.is_ok() {
+        let app2 = app.clone();
+        let _ = blocking(move || Ok(recordings(&app2).camera_preview(BUBBLE_PICTURE_WIDTH))).await;
     }
     if started.is_err() {
         countdown_close(&app);
         control_close(&app);
+        bubble_close(&app);
         own_windows(&app, false);
     } else if control {
         main_window_aside(&app);
@@ -1045,6 +1166,9 @@ async fn start_recording(
     }
     started
 }
+
+/// The bubble's pictures: wide enough for the Large bubble on a 2x display.
+const BUBBLE_PICTURE_WIDTH: u32 = 640;
 
 /// What `start_recording` says when the countdown was cancelled before it had started (the
 /// setup screen shows nothing for it).
@@ -1079,6 +1203,7 @@ async fn countdown_cancel(app: AppHandle) -> Result<(), String> {
     })
     .await;
     control_close(&app);
+    bubble_close(&app);
     tray_close();
     main_window_back(&app);
     let _ = app.emit_to("main", "recording-cancelled", ());
@@ -1112,6 +1237,7 @@ async fn stop_recording(app: AppHandle) -> Result<Session, String> {
     })
     .await;
     control_close(&app);
+    bubble_close(&app);
     tray_close();
     main_window_back(&app);
     // The stop may come from the floating control or tray: the main window opens Finish.
@@ -1272,6 +1398,11 @@ struct Prefs {
     /// Where the floating control was left, per display id: points from its top-left.
     #[serde(default)]
     control_positions: std::collections::HashMap<String, (f64, f64)>,
+    /// Where the camera bubble was left, per display id, and its size.
+    #[serde(default)]
+    bubble_positions: std::collections::HashMap<String, (f64, f64)>,
+    #[serde(default)]
+    bubble_size: Option<String>,
 }
 
 fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1572,7 +1703,9 @@ pub fn run() {
             start_recording,
             countdown_done,
             countdown_cancel,
-            control_move,
+            floating_move,
+            bubble_resize,
+            bubble_hide,
             countdown_pref,
             set_countdown_pref,
             pause_recording,
