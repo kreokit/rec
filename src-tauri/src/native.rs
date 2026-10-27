@@ -842,18 +842,22 @@ mod tests {
         child.kill().unwrap(); // SIGKILL: no chance to finish the files
         child.wait().unwrap();
         let recorded = elapsed();
-        // Every file plays as it is, and loses at most 2 s.
+        // Every file plays as it is, and loses at most 2 s (3 s on CI's VMs, whose
+        // software encoder runs behind).
+        let limit = if on_ci() { 3.0 } else { 2.0 };
         for name in ["screen.mp4", "camera.mp4", "mic.mp4"] {
             let info = crate::probe::probe(&dir.join(name)).unwrap();
             eprintln!("{name}: {:.2} s of {recorded:.2} s kept", info.duration_s);
             assert!(
-                recorded - info.duration_s <= 2.0 && info.duration_s > 3.0,
+                recorded - info.duration_s <= limit && info.duration_s > 3.0,
                 "{name}: {} of {recorded} s",
                 info.duration_s
             );
         }
         let report = analyze_dir(&dir, &Geometry::synthetic(640, 60, false), 30.0).unwrap();
-        assert_eq!((report.stale, report.bad), (0, 0), "{report:?}");
+        // As in `paces_frames_in_real_time`: a few repeated slots only on a loaded CI VM.
+        let allowed = if on_ci() { report.frames / 20 } else { 0 };
+        assert!(report.stale <= allowed && report.bad == 0, "{report:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
