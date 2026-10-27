@@ -28,6 +28,17 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+/// `KREOKIT_REC_SYNTHETIC=1` (debug and test builds): a made-up display and microphone,
+/// and recordings from the synthetic sources, so the app can be tried without recording
+/// the real screen or microphone. `=ask` also shows the permissions as not yet allowed.
+fn synthetic() -> Option<String> {
+    if cfg!(any(debug_assertions, feature = "bench")) {
+        std::env::var("KREOKIT_REC_SYNTHETIC").ok()
+    } else {
+        None
+    }
+}
+
 /// The one Recordings for the app, in the app data folder's "recordings".
 fn recordings(app: &AppHandle) -> tauri::State<'_, Recordings> {
     app.state::<Recordings>()
@@ -67,6 +78,18 @@ fn macos_major() -> u32 {
 
 #[tauri::command]
 fn permissions() -> Permissions {
+    if let Some(mode) = synthetic() {
+        let access = if mode == "ask" {
+            Access::NotAsked
+        } else {
+            Access::Allowed
+        };
+        return Permissions {
+            screen: access,
+            mic: access,
+            restart_after_screen: true,
+        };
+    }
     Permissions {
         screen: native::screen_access(),
         mic: native::mic_access(),
@@ -77,13 +100,18 @@ fn permissions() -> Permissions {
 /// Shows the system's microphone question (first time only); returns the answer.
 #[tauri::command]
 async fn request_mic() -> Result<Access, String> {
+    if synthetic().is_some() {
+        return Ok(Access::Allowed);
+    }
     blocking(|| Ok(native::request_mic_access())).await
 }
 
 /// The system's screen-recording request (macOS shows it once, then opens nothing).
 #[tauri::command]
 fn request_screen() {
-    native::request_screen_access();
+    if synthetic().is_none() {
+        native::request_screen_access();
+    }
 }
 
 /// Opens System Preferences (System Settings) at Screen Recording or Microphone.
@@ -95,7 +123,7 @@ fn open_privacy_settings(kind: String) -> Result<(), String> {
         _ => return Err("unknown setting".into()),
     };
     #[cfg(target_os = "macos")]
-    {
+    if synthetic().is_none() {
         std::process::Command::new("open")
             .arg(format!(
                 "x-apple.systempreferences:com.apple.preference.security?{pane}"
@@ -122,6 +150,22 @@ struct Devices {
 
 #[tauri::command]
 async fn devices() -> Result<Devices, String> {
+    if synthetic().is_some() {
+        return Ok(Devices {
+            displays: vec![Display {
+                id: 0,
+                name: "Test display".into(),
+                width: 2880,
+                height: 1800,
+                main: true,
+            }],
+            mics: vec![Mic {
+                id: "synthetic".into(),
+                name: "Test microphone".into(),
+                default: true,
+            }],
+        });
+    }
     blocking(|| {
         Ok(Devices {
             displays: native::displays(),
@@ -156,11 +200,21 @@ fn estimate(app: AppHandle, width: u32, height: u32, quality: u32, mic: bool) ->
 
 #[tauri::command]
 async fn monitor_start(mic_id: String) -> Result<(), String> {
+    if synthetic().is_some() {
+        return Ok(());
+    }
     blocking(move || native::monitor_start(&mic_id)).await
 }
 
 #[tauri::command]
 fn monitor_level() -> f32 {
+    if synthetic().is_some() {
+        // A level that moves like speech, for the meter.
+        let t = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f32());
+        return 0.05 + 0.25 * ((t * 3.1).sin() * (t * 7.3).sin()).abs();
+    }
     native::monitor_peak()
 }
 
@@ -304,7 +358,11 @@ pub fn run() {
         ])
         .setup(|app| {
             let root: PathBuf = app.path().app_data_dir()?.join("recordings");
-            app.manage(Recordings::new(root, Box::new(sessions::NativeBackend)));
+            let mut recordings = Recordings::new(root, Box::new(sessions::NativeBackend));
+            if synthetic().is_some() {
+                recordings.synthetic = Some(native::Synthetic::default());
+            }
+            app.manage(recordings);
             Ok(())
         })
         .build(tauri::generate_context!())

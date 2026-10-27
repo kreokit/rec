@@ -1,0 +1,228 @@
+/* Home: recovery, record setup and recent recordings (the list from KreoKit Voice). */
+
+.app-name {
+  flex: 1;
+  font: var(--text-title);
+  font-size: 13px;
+}
+
+.home-main {
+  overflow-y: auto;
+  padding: var(--space-8) var(--space-8) var(--space-12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-6);
+}
+
+/* An unfinished recording to recover */
+
+.recover-banner {
+  width: 100%;
+  max-width: 880px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-warning);
+  border-radius: var(--radius-lg);
+  color: var(--color-warning);
+}
+
+.recover-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--color-text);
+}
+
+.recover-text span {
+  font: var(--text-meta);
+  font-weight: 400;
+  color: var(--color-text-2);
+}
+
+/* Record setup */
+
+.setup {
+  width: 100%;
+  max-width: 880px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: var(--space-6);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.setup-title {
+  font: var(--text-hero);
+  font-size: 24px;
+  line-height: 32px;
+}
+
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4) var(--space-6);
+  align-items: start;
+}
+
+.setup-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.setup-size {
+  flex: 1;
+  font: var(--text-meta);
+  font-weight: 400;
+  color: var(--color-text-2);
+}
+
+.record-button.ui-button {
+  height: 40px;
+  padding: 0 var(--space-6);
+  font-size: 14px;
+}
+
+/* Level meter (setup and recording) */
+
+.level-meter {
+  height: var(--size-control);
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-2);
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+
+.level-fill {
+  height: 6px;
+  min-width: 0;
+  max-width: 100%;
+  background: var(--color-accent);
+  border-radius: 3px;
+  transition: width 80ms linear;
+}
+
+.level-meter.clipping .level-fill {
+  background: var(--color-danger);
+}
+
+.level-meter.off {
+  opacity: 0.5;
+}
+
+/* Recent recordings */
+
+.recent {
+  width: 100%;
+  max-width: 880px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.recent-empty {
+  color: var(--color-text-3);
+}
+
+.recent-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.recent-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding-right: var(--space-3);
+}
+
+.recent-row + .recent-row {
+  border-top: 1px solid var(--color-border);
+}
+
+.recent-row:hover {
+  background: var(--color-surface-2);
+}
+
+.recent-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--size-row-min);
+  padding: var(--space-2) 0 var(--space-2) var(--space-3);
+  background: none;
+  border: none;
+  color: var(--color-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.recent-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  background: var(--color-surface-3);
+  border-radius: var(--radius-md);
+  color: var(--color-text-2);
+}
+
+.recent-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recent-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-meta,
+.recent-check {
+  font: var(--text-meta);
+  font-weight: 400;
+  color: var(--color-text-3);
+}
+
+.recent-check {
+  flex: none;
+  max-width: 40%;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-check.problem {
+  color: var(--color-warning);
+}

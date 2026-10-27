@@ -160,6 +160,8 @@ struct Active {
 pub struct Recordings {
     root: PathBuf,
     backend: Box<dyn Backend>,
+    /// Every recording from synthetic sources (dev and test builds, `KREOKIT_REC_SYNTHETIC`).
+    pub synthetic: Option<crate::native::Synthetic>,
     active: Arc<Mutex<Option<Active>>>,
     heartbeat: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
 }
@@ -211,6 +213,7 @@ impl Recordings {
         Recordings {
             root,
             backend,
+            synthetic: None,
             active: Arc::new(Mutex::new(None)),
             heartbeat: Mutex::new(None),
         }
@@ -233,7 +236,7 @@ impl Recordings {
     }
 
     pub fn start(&self, options: &Options) -> Result<Session, String> {
-        self.start_with(options, None)
+        self.start_with(options, self.synthetic)
     }
 
     /// `synthetic`: generated sources instead of the real screen and microphone (tests).
