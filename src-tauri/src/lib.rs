@@ -7,6 +7,7 @@ mod check;
 mod decode;
 mod disk;
 mod encoder;
+mod export;
 mod ffmpeg;
 #[cfg(feature = "bench")]
 mod fieldtest;
@@ -760,6 +761,204 @@ async fn prepare_sound(
     .await
 }
 
+/// The app's remembered choices (`prefs.json` in the app data folder).
+#[derive(Default, Serialize, serde::Deserialize)]
+struct Prefs {
+    /// Where exports go; the Movies (Videos) folder when not set or gone.
+    #[serde(default)]
+    export_folder: Option<PathBuf>,
+}
+
+fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("prefs.json"))
+}
+
+fn read_prefs(app: &AppHandle) -> Prefs {
+    prefs_path(app)
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default()
+}
+
+/// The folder exports go to.
+fn export_folder(app: &AppHandle) -> Result<PathBuf, String> {
+    match read_prefs(app).export_folder.filter(|f| f.is_dir()) {
+        Some(folder) => Ok(folder),
+        None => app
+            .path()
+            .video_dir()
+            .or_else(|_| app.path().home_dir())
+            .map_err(|_| "No folder to export to was found. Choose one with Change…".to_string()),
+    }
+}
+
+/// Where the export will go, and whether a file of that name is already there.
+#[derive(Serialize)]
+struct ExportTarget {
+    folder: PathBuf,
+    name: String,
+    exists: bool,
+    estimated_bytes: u64,
+    free_bytes: Option<u64>,
+}
+
+fn export_job_parts(
+    app: &AppHandle,
+    id: &str,
+) -> Result<(PathBuf, Session, finish::Settings, f64), String> {
+    let dir = recordings(app).dir(id)?;
+    let session = sessions::read_session(&dir)
+        .ok_or("This recording no longer exists. Go back to Home and choose another one.")?;
+    let settings = finish::read(&dir, &session);
+    let duration = session
+        .check
+        .as_ref()
+        .map_or(session.elapsed_s, |c| c.duration_s);
+    Ok((dir, session, settings, duration))
+}
+
+#[tauri::command]
+async fn export_target(app: AppHandle, id: String) -> Result<ExportTarget, String> {
+    blocking(move || {
+        let (dir, session, settings, duration_s) = export_job_parts(&app, &id)?;
+        let folder = export_folder(&app)?;
+        let name = export::file_name(&session);
+        let job = export::Job {
+            dir: &dir,
+            session: &session,
+            settings: &settings,
+            duration_s,
+        };
+        Ok(ExportTarget {
+            exists: export::names_in(&folder).contains(&name.to_lowercase()),
+            estimated_bytes: job.estimated_bytes(),
+            free_bytes: disk::free_bytes(&folder),
+            folder,
+            name,
+        })
+    })
+    .await
+}
+
+/// Remembers the folder exports go to.
+#[tauri::command]
+async fn set_export_folder(app: AppHandle, folder: PathBuf) -> Result<(), String> {
+    blocking(move || {
+        if !folder.is_dir() {
+            return Err("That folder can't be used. Choose another one.".into());
+        }
+        let prefs = Prefs {
+            export_folder: Some(folder),
+        };
+        let path = prefs_path(&app)?;
+        let json = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
+        std::fs::write(path, json).map_err(|e| {
+            format!("The folder couldn't be remembered ({e}). It's used for this export only.")
+        })
+    })
+    .await
+}
+
+/// The running export: its cancel flag, and the last finished file (for Show in folder).
+#[derive(Default)]
+struct ExportState {
+    cancel: std::sync::Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    last: std::sync::Mutex<Option<PathBuf>>,
+}
+
+#[derive(Clone, Serialize)]
+struct ExportProgress {
+    id: String,
+    /// "sound", "picture" or "check".
+    stage: &'static str,
+    fraction: f64,
+}
+
+/// Exports the recording with its saved Finish choices into the export folder (events
+/// "export-progress"). `replace`: replace a file of the same name; otherwise keep it and
+/// use the next free name.
+#[tauri::command]
+async fn export_recording(
+    app: AppHandle,
+    id: String,
+    replace: bool,
+) -> Result<export::Done, String> {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    *app.state::<ExportState>().cancel.lock().unwrap() = Some(cancel.clone());
+    // The preview's sound job would compete for the CPU.
+    if let Some(job) = app.state::<SoundJob>().0.lock().unwrap().take() {
+        job.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    blocking(move || {
+        let (dir, session, settings, duration_s) = export_job_parts(&app, &id)?;
+        let folder = export_folder(&app)?;
+        let job = export::Job {
+            dir: &dir,
+            session: &session,
+            settings: &settings,
+            duration_s,
+        };
+        // Room for the video, its temporary copy's overhead and the sound.
+        let needed = job.estimated_bytes() + job.estimated_bytes() / 5 + 100_000_000;
+        if let Some(free) = disk::free_bytes(&folder)
+            && free < needed
+        {
+            return Err(format!(
+                "There isn't enough free space in that folder: the video needs about {}, {} is free. Free up some space or choose another folder, then export again.",
+                disk::gigabytes(needed),
+                disk::gigabytes(free)
+            ));
+        }
+        let _awake = awake::KeepAwake::new("exporting a video");
+        let mut last = ("", -1.0f64);
+        let done = export::export(&job, &folder.join(export::file_name(&session)), replace, &cancel, &mut |stage, f| {
+            if stage != last.0 || f - last.1 >= 0.01 || f >= 1.0 {
+                last = (stage, f);
+                let _ = app.emit(
+                    "export-progress",
+                    ExportProgress {
+                        id: id.clone(),
+                        stage,
+                        fraction: f,
+                    },
+                );
+            }
+        })?;
+        *app.state::<ExportState>().last.lock().unwrap() = Some(done.path.clone());
+        Ok(done)
+    })
+    .await
+}
+
+#[tauri::command]
+fn cancel_export(app: AppHandle) {
+    if let Some(cancel) = app.state::<ExportState>().cancel.lock().unwrap().as_ref() {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Shows the last exported video selected in Finder (Explorer, the file manager).
+#[tauri::command]
+fn show_export(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = app
+        .state::<ExportState>()
+        .last
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|p| p.is_file())
+        .ok_or("The exported video is no longer there. Export it again.")?;
+    app.opener()
+        .reveal_item_in_dir(path)
+        .map_err(|e| format!("The folder didn't open ({e}). Try again, or Report a problem."))
+}
+
 /// The recording's Finish choices (saved ones, or the first choices).
 #[tauri::command]
 async fn finish_settings(app: AppHandle, id: String) -> Result<finish::Settings, String> {
@@ -859,6 +1058,11 @@ pub fn run() {
             recording_media,
             recording_waveform,
             prepare_sound,
+            export_target,
+            set_export_folder,
+            export_recording,
+            cancel_export,
+            show_export,
             save_finish_settings,
             pending_recoveries,
             recover_recording,
@@ -881,6 +1085,7 @@ pub fn run() {
             }
             app.manage(recordings);
             app.manage(SoundJob::default());
+            app.manage(ExportState::default());
             Ok(())
         })
         .build(tauri::generate_context!())

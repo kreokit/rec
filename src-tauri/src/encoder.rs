@@ -296,7 +296,6 @@ fn candidates() -> Vec<&'static str> {
 /// The H.264 profiles accepted from `encoder` (as KreoKit Clips decided): OpenH264 also
 /// Constrained Baseline (FFmpeg's wrapper may ignore `-profile high`), Media Foundation
 /// High or Main.
-#[cfg(test)]
 pub fn accepted_profiles(encoder: &str) -> &'static [&'static str] {
     match encoder {
         "h264_mf" => &["High", "Main"],
