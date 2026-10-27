@@ -1018,4 +1018,222 @@ pub mod tests {
         assert_eq!(fs::read_dir(&out).unwrap().count(), 0);
         assert!(!dir.join("export-work").exists());
     }
+
+    /// Writes raw mono 48 kHz samples as an AAC track.
+    fn write_sound(path: &Path, samples: &[f32]) {
+        let mut e = Command::new(ffmpeg::locate("ffmpeg").unwrap())
+            .args(sound::input_args(1))
+            .args(sound::AAC_ARGS)
+            .arg(path)
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+        e.stdin.take().unwrap().write_all(&bytes).unwrap();
+        assert!(e.wait().unwrap().success());
+    }
+
+    /// The tests' oracle for sync (CLAUDE.md "Tests"): the screen flashes white on every
+    /// whole second and the microphone taps at the same moments over a quiet noise floor.
+    /// After a trim that starts between seconds, the voice clean-up (RNNoise and its delay
+    /// removed), the loudness gain, AAC and the bubble layout, every flash in the export must
+    /// still match its tap within one frame.
+    #[test]
+    fn picture_and_sound_stay_in_sync_through_the_export() {
+        let dir = crate::sessions::tests::temp_root("export-sync");
+        let ffmpeg = ffmpeg::locate("ffmpeg").unwrap();
+        for (file, colour, size) in [
+            ("screen.mp4", "black", "640x360"),
+            ("camera.mp4", "0xd02020", "320x240"),
+        ] {
+            let flash = if file == "screen.mp4" {
+                r",drawbox=x=0:y=0:w=iw:h=ih:color=white:t=fill:enable='eq(mod(n\,30)\,0)'"
+            } else {
+                ""
+            };
+            let ok = Command::new(&ffmpeg)
+                .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+                .arg(format!("color=c={colour}:s={size}:r=30:d=7{flash}"))
+                .args(["-c:v", "mpeg4", "-q:v", "2", "-g", "30"])
+                .arg(dir.join(file))
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok);
+        }
+        let mut x = 11u64;
+        let mut mic: Vec<f32> = (0..7 * 48_000)
+            .map(|_| {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                ((x >> 40) as f32 / (1u64 << 23) as f32 - 1.0) * 0.003
+            })
+            .collect();
+        for second in 0..7 {
+            for i in 0..480 {
+                let t = i as f32 / 48_000.0;
+                mic[second * 48_000 + i] +=
+                    0.5 * (-t / 0.002).exp() * (2.0 * std::f32::consts::PI * 2_000.0 * t).sin();
+            }
+        }
+        write_sound(&dir.join("mic.mp4"), &mic);
+
+        let s = session((640, 360), Some((320, 240)), true);
+        let mut set = settings(
+            Layout::Bubble,
+            Bubble {
+                shape: Shape::Circle,
+                size: Size::Small,
+                x: 1.0,
+                y: 1.0,
+            },
+        );
+        set.start_s = 0.5;
+        set.end_s = Some(6.5);
+        set.clean_voice = true;
+        let job = Job {
+            dir: &dir,
+            session: &s,
+            settings: &set,
+            duration_s: 7.0,
+        };
+        let done = export(
+            &job,
+            &dir.join("sync.mp4"),
+            true,
+            &AtomicBool::new(false),
+            &mut |_, _| {},
+        )
+        .unwrap();
+
+        // Flashes: frames whose top-left corner is light.
+        let frames = Command::new(&ffmpeg)
+            .args(["-v", "error", "-i"])
+            .arg(&done.path)
+            .args([
+                "-vf",
+                "crop=64:64:0:0",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "gray",
+                "pipe:1",
+            ])
+            .output()
+            .unwrap()
+            .stdout;
+        let flashes: Vec<f64> = frames
+            .chunks_exact(64 * 64)
+            .enumerate()
+            .filter(|(_, f)| f.iter().map(|&v| v as u32).sum::<u32>() / (64 * 64) > 128)
+            .map(|(i, _)| i as f64 / 30.0)
+            .collect();
+        assert_eq!(flashes.len(), 6, "{flashes:?}");
+        // Taps: where each second's sound first reaches half its loudest.
+        let sound = crate::decode::tests::read_all(&done.path, 1, RATE);
+        let taps: Vec<f64> = sound
+            .chunks(48_000)
+            .filter_map(|second| {
+                let peak = second.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+                second.iter().position(|v| v.abs() >= peak * 0.5)
+            })
+            .enumerate()
+            .map(|(k, i)| k as f64 + i as f64 / 48_000.0)
+            .collect();
+        let mut offsets = Vec::new();
+        for flash in &flashes {
+            let nearest = taps
+                .iter()
+                .map(|t| t - flash)
+                .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+                .unwrap();
+            offsets.push(format!("{:+.1}", nearest * 1000.0));
+            assert!(
+                nearest.abs() <= 1.0 / 30.0,
+                "flash at {flash:.3} s: tap {nearest:+.4} s away ({taps:?})"
+            );
+        }
+        eprintln!("tap − flash in the export (ms): {}", offsets.join(" "));
+        // The first flash is the recording's 1.0 s, half a second in.
+        assert!((flashes[0] - 0.5).abs() < 0.02, "{flashes:?}");
+    }
+
+    /// Export speed on this computer: 10 min of a moving 1728×1080 screen with a 720p
+    /// camera bubble and speech-like sound, as the dev Mac records them (VideoToolbox, the
+    /// recording's bitrates). Run under `/usr/bin/time -l` for the CPU of FFmpeg too:
+    /// `cargo test --lib measure_ten_minute_export -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn measure_ten_minute_export() {
+        let seconds = 600.0;
+        let dir = crate::sessions::tests::temp_root("export-measure");
+        let ffmpeg = ffmpeg::locate("ffmpeg").unwrap();
+        let started = std::time::Instant::now();
+        for (file, source, w, h) in [
+            ("screen.mp4", "testsrc2", 1728, 1080),
+            ("camera.mp4", "testsrc", 1280, 720),
+        ] {
+            let ok = Command::new(&ffmpeg)
+                .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+                .arg(format!("{source}=s={w}x{h}:r=30:d={seconds}"))
+                .args(["-c:v", "h264_videotoolbox", "-b:v"])
+                .arg(sessions::video_bitrate(w, h).to_string())
+                .args(["-g", "30", "-pix_fmt", "yuv420p"])
+                .arg(dir.join(file))
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok);
+        }
+        let speech: Vec<f32> = crate::loudness::tests::speechy(seconds, -28.0)
+            .into_iter()
+            .step_by(2)
+            .collect();
+        write_sound(&dir.join("mic.mp4"), &speech);
+        eprintln!(
+            "made the 10 min recording in {:.0} s",
+            started.elapsed().as_secs_f64()
+        );
+
+        let s = session((1728, 1080), Some((1280, 720)), true);
+        let mut set = settings(Layout::Bubble, Bubble::default());
+        set.clean_voice = true;
+        let job = Job {
+            dir: &dir,
+            session: &s,
+            settings: &set,
+            duration_s: seconds,
+        };
+        let mut stages: Vec<(&str, std::time::Instant)> = Vec::new();
+        let started = std::time::Instant::now();
+        let done = export(
+            &job,
+            &dir.join("measure.mp4"),
+            true,
+            &AtomicBool::new(false),
+            &mut |stage, _| {
+                if stages.last().is_none_or(|(s, _)| *s != stage) {
+                    stages.push((stage, std::time::Instant::now()));
+                }
+            },
+        )
+        .unwrap();
+        let total = started.elapsed().as_secs_f64();
+        let mut previous = started;
+        for (stage, at) in &stages {
+            eprintln!("  before {stage}: {:.1} s", (*at - previous).as_secs_f64());
+            previous = *at;
+        }
+        eprintln!(
+            "export of 10:00 took {total:.1} s ({:.1}× real time) with {}; {:.1} LUFS, {:.1} dBTP, {} MB",
+            seconds / total,
+            done.encoder,
+            done.lufs.unwrap_or(f64::NAN),
+            done.true_peak_db.unwrap_or(f64::NAN),
+            fs::metadata(&done.path).unwrap().len() / 1_000_000
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
