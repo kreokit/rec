@@ -9,7 +9,9 @@
 //       whether every output frame caught the newest picture (fresh), repeated it because
 //       nothing changed (unchanged), or missed a change (stale).
 //   --bench sync --out DIR [--seconds 45]
-//       The tap test for sound against picture: the user presses the space bar firmly;
+//       The tap test for sound against picture. The window waits in front of everything
+//       until the user clicks it and presses space; that first press starts the
+//       measurement (`seconds` from then). The user presses the space bar firmly;
 //       each press makes a click the microphone hears, and the window flashes white at
 //       that moment. The offsets between the flashes and the clicks in the recording are
 //       the sync of the two tracks (plus the screen's own delay to show the flash).
@@ -51,6 +53,8 @@ static BOOL stillAt(double since) {
 @interface KRFlashView : NSView
 @property(nonatomic) double flashUntil;
 @property(nonatomic) NSMutableArray<NSNumber *> *presses; // host seconds
+@property(nonatomic, copy) void (^onFirstPress)(void);
+@property(nonatomic) BOOL measuring;
 @end
 @implementation KRFlashView
 - (BOOL)acceptsFirstResponder { return YES; }
@@ -59,16 +63,25 @@ static BOOL stillAt(double since) {
     [on ? NSColor.whiteColor : NSColor.blackColor setFill];
     NSRectFill(self.bounds);
     if (!on) {
-        NSDictionary *attrs = @{NSForegroundColorAttributeName : [NSColor colorWithWhite:0.6 alpha:1], NSFontAttributeName : [NSFont systemFontOfSize:15]};
-        NSString *text = @"Press the space bar firmly, about once a second.";
+        // Big while waiting; small and out of the measured middle while measuring.
+        NSString *text = self.measuring ? @"Measuring: keep pressing space firmly, about once a second." : @"Click here, then press space once a second";
+        NSDictionary *attrs = @{
+            NSForegroundColorAttributeName : self.measuring ? [NSColor colorWithWhite:0.6 alpha:1] : NSColor.whiteColor,
+            NSFontAttributeName : self.measuring ? [NSFont systemFontOfSize:15] : [NSFont boldSystemFontOfSize:30],
+        };
         NSSize size = [text sizeWithAttributes:attrs];
-        [text drawAtPoint:NSMakePoint((self.bounds.size.width - size.width) / 2, 24) withAttributes:attrs];
+        CGFloat y = self.measuring ? 24 : (self.bounds.size.height - size.height) / 2;
+        [text drawAtPoint:NSMakePoint((self.bounds.size.width - size.width) / 2, y) withAttributes:attrs];
     }
 }
 - (void)keyDown:(NSEvent *)event {
     if (event.isARepeat || ![event.characters isEqual:@" "]) return;
     // NSEvent timestamps are seconds since startup on the host clock.
     [self.presses addObject:@(event.timestamp)];
+    if (!self.measuring) {
+        self.measuring = YES;
+        if (self.onFirstPress) self.onFirstPress();
+    }
     self.flashUntil = hostNow() + 0.15;
     self.needsDisplay = YES;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 160 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ self.needsDisplay = YES; });
@@ -140,14 +153,16 @@ int kr_bench_main(int argc, const char **argv) {
         NSMutableDictionary *info = [NSMutableDictionary dictionaryWithDictionary:@{@"mode" : mode, @"width" : @(w), @"height" : @(h), @"capture_fps" : @(captureFps), @"api" : api}];
         KRFlashView *flash = nil;
         if (sync) {
-            NSRect frame = NSMakeRect(0, 0, 520, 320);
+            NSRect frame = NSMakeRect(0, 0, 760, 440);
             window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
             window.title = @"KreoKit Rec: sync test";
+            window.level = NSStatusWindowLevel; // in front of everything
             [window center];
             flash = [[KRFlashView alloc] initWithFrame:frame];
             flash.presses = [NSMutableArray array];
             window.contentView = flash;
             [window makeKeyAndOrderFront:nil];
+            [window orderFrontRegardless];
             [window makeFirstResponder:flash];
             [app activateIgnoringOtherApps:YES];
             NSRect content = [window convertRectToScreen:[flash convertRect:flash.bounds toView:nil]];
@@ -185,8 +200,8 @@ int kr_bench_main(int argc, const char **argv) {
         cfg.video_bitrate = (int)(w * h * 30 * 0.13);
         cfg.mic = mic;
         __block void *rec = NULL;
-        // Starts once the window is on screen.
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), ^{
+        __block double t0 = 0;
+        void (^begin)(void) = ^{
             char error[1024] = {0};
             KrRecConfig c = cfg;
             rec = kr_rec_start(&c, error, sizeof error);
@@ -196,28 +211,36 @@ int kr_bench_main(int argc, const char **argv) {
                 exit(1);
             }
             fprintf(stderr, "recording %.0f s into %s\n", seconds, out.UTF8String);
-        });
-        __block double t0 = 0;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            KrRecStatus s;
-            kr_rec_status(rec, &s);
-            t0 = hostNow() - s.elapsed; // the recording's 0:00 on the host clock
-        });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((1.0 + seconds) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            KrRecStatus s;
-            char error[1024] = {0};
-            int result = kr_rec_stop(rec, &s, error, sizeof error);
-            info[@"status"] = statusJson(&s);
-            if (result) info[@"error"] = @(error);
-            if (flash) {
-                NSMutableArray *presses = [NSMutableArray array];
-                for (NSNumber *p in flash.presses) [presses addObject:@(p.doubleValue - t0)];
-                info[@"presses"] = presses; // seconds on the recording's timeline
-            }
-            writeJson([out stringByAppendingPathComponent:@"bench.json"], info);
-            fprintf(stderr, "done: %lld frames, %lld new, %lld repeated\n", s.frames, s.frames_new, s.frames_repeated);
-            exit(result ? 1 : 0);
-        });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                KrRecStatus s;
+                kr_rec_status(rec, &s);
+                t0 = hostNow() - s.elapsed; // the recording's 0:00 on the host clock
+            });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((0.5 + seconds) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                KrRecStatus s;
+                char error[1024] = {0};
+                int result = kr_rec_stop(rec, &s, error, sizeof error);
+                info[@"status"] = statusJson(&s);
+                if (result) info[@"error"] = @(error);
+                if (flash) {
+                    NSMutableArray *presses = [NSMutableArray array];
+                    for (NSNumber *p in flash.presses) [presses addObject:@(p.doubleValue - t0)];
+                    info[@"presses"] = presses; // seconds on the recording's timeline
+                }
+                writeJson([out stringByAppendingPathComponent:@"bench.json"], info);
+                fprintf(stderr, "done: %lld frames, %lld new, %lld repeated\n", s.frames, s.frames_new, s.frames_repeated);
+                exit(result ? 1 : 0);
+            });
+        };
+        if (flash) {
+            // The sync test starts with the user's first press (the window is then in front
+            // and has the keyboard).
+            fprintf(stderr, "waiting for the first press\n");
+            flash.onFirstPress = begin;
+        } else {
+            // Starts once the pattern window is on screen.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 2), dispatch_get_main_queue(), begin);
+        }
         [app run];
     }
     return 0;

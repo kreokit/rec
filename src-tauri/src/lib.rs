@@ -108,10 +108,9 @@ fn permissions(app: AppHandle) -> Permissions {
     }
     let screen = native::screen_access();
     let marker = screen_marker(&app);
+    // Kept once written: after an update, a permission given to the old copy no longer
+    // matches, and this is how the next start knows to offer the reset.
     let asked = marker.as_ref().is_some_and(|m| m.is_file());
-    if screen == Access::Allowed && asked {
-        let _ = std::fs::remove_file(marker.unwrap());
-    }
     Permissions {
         screen,
         mic: native::mic_access(),
