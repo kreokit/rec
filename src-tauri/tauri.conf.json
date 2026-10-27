@@ -20,7 +20,11 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/recordings/*/*.mp4", "$APPDATA/recordings/*/*.m4a"]
+      }
     },
     "macOSPrivateApi": true
   },

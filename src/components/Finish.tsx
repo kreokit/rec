@@ -1,9 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { CircleCheck, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { CircleCheck, Pause, Play, TriangleAlert } from "lucide-react";
+import { Timeline } from "./Timeline";
 import { TopBar } from "./TopBar";
-import { FinishSettings, Layout, Loudness, Session, api } from "../lib/api";
+import { FinishSettings, Layout, Loudness, Media, Session, api } from "../lib/api";
 import { checkSummary, formatDuration, recordingTitle } from "../lib/format";
-import { ICON_STROKE, SectionLabel, Segmented, Switch, toast } from "../ui";
+import { usePlayer } from "../lib/player";
+import { Trim, formatTime, savedEnd, snap, withEnd, withStart } from "../lib/trim";
+import { Button, ICON_STROKE, IconButton, Kbd, SectionLabel, Segmented, Switch, toast } from "../ui";
 import "../styles/finish.css";
 
 const LOUDNESS: { value: Loudness; label: string; hint: string }[] = [
@@ -12,19 +16,36 @@ const LOUDNESS: { value: Loudness; label: string; hint: string }[] = [
   { value: "keep", label: "Keep", hint: "as recorded" },
 ];
 
+/** Keys typed into these don't drive the player. */
+const TYPING = new Set(["INPUT", "TEXTAREA", "SELECT"]);
+
 /**
  * Finish: preview and trim the recording, choose its layout and voice, then export it.
  * Every change is saved with the recording right away (finish.json).
  */
 export function Finish({ session, onHome }: { session: Session; onHome: () => void }) {
   const [settings, setSettings] = useState<FinishSettings | null>(null);
+  const [media, setMedia] = useState<Media | null>(null);
+  const [peaks, setPeaks] = useState<Uint8Array | null>(null);
   const saving = useRef<Promise<void>>(Promise.resolve());
+  const duration = session.check?.duration_s || session.elapsed_s;
+  const fps = session.screen?.fps ?? 30;
 
   useEffect(() => {
-    api.finishSettings(session.id).then(setSettings, (e) => {
-      toast(String(e), "error");
-      onHome();
-    });
+    Promise.all([api.finishSettings(session.id), api.recordingMedia(session.id)]).then(
+      ([s, m]) => {
+        setSettings(s);
+        setMedia(m);
+      },
+      (e) => {
+        toast(String(e), "error");
+        onHome();
+      },
+    );
+    api.recordingWaveform(session.id).then(
+      (bytes) => setPeaks(new Uint8Array(bytes)),
+      (e) => toast(String(e), "error"),
+    );
   }, [session.id]);
 
   /** Changes the choices and saves them (in order, so the last change wins). */
@@ -37,12 +58,69 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
     );
   };
 
+  // The trim follows the handles while dragging; it's saved when they're let go.
+  const [trim, setTrim] = useState<Trim>({ start: 0, end: duration });
+  useEffect(() => {
+    if (settings) setTrim({ start: settings.start_s, end: settings.end_s ?? duration });
+    // Only when the saved choices arrive.
+  }, [settings === null]);
+  const saveTrim = (t: Trim) => change({ start_s: t.start, end_s: savedEnd(t, duration, fps) });
+
+  const screenRef = useRef<HTMLVideoElement>(null);
+  const cameraRef = useRef<HTMLVideoElement>(null);
+  const micRef = useRef<HTMLAudioElement>(null);
+  const systemRef = useRef<HTMLAudioElement>(null);
+  const refs = useMemo(() => [micRef, systemRef, screenRef, cameraRef], []);
+  const player = usePlayer(refs, trim, fps);
+
+  const setEdge = (edge: "start" | "end", seconds: number) => {
+    const next = edge === "start" ? withStart(trim, seconds, fps) : withEnd(trim, seconds, fps, duration);
+    setTrim(next);
+    player.seek(edge === "start" ? next.start : next.end);
+    return next;
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (TYPING.has((e.target as HTMLElement).tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+      const frame = 1 / fps;
+      const step = e.shiftKey ? 1 : frame;
+      const seekTo = (t: number) => player.seek(Math.min(Math.max(snap(t, fps), 0), duration));
+      switch (e.key) {
+        case " ":
+          player.toggle();
+          break;
+        case "ArrowLeft":
+          seekTo(player.time - step);
+          break;
+        case "ArrowRight":
+          seekTo(player.time + step);
+          break;
+        case "i":
+        case "I":
+          saveTrim(setEdge("start", player.time));
+          break;
+        case "o":
+        case "O":
+          saveTrim(setEdge("end", player.time));
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
   const { text, ok } = checkSummary(session);
   const layouts: { value: Layout; label: string; disabled: boolean }[] = [
     { value: "screen", label: "Screen", disabled: !session.screen },
     { value: "bubble", label: "Screen + camera", disabled: !session.screen || !session.camera },
     { value: "camera", label: "Camera", disabled: !session.camera },
   ];
+  const layout = settings?.layout ?? "screen";
+  const src = (path: string | null) => (path ? convertFileSrc(path) : undefined);
 
   return (
     <div className="screen">
@@ -67,13 +145,67 @@ export function Finish({ session, onHome }: { session: Session; onHome: () => vo
             )}
             {text}
           </div>
-          <div className="finish-stage" aria-label="Preview" />
+          <div className="finish-stage" aria-label="Preview" onClick={() => player.toggle()}>
+            {media?.screen && (
+              <video
+                ref={screenRef}
+                className={layout === "camera" ? "stage-video hidden" : "stage-video"}
+                src={src(media.screen)}
+                preload="auto"
+                muted
+                playsInline
+              />
+            )}
+            {media?.camera && (
+              <video
+                ref={cameraRef}
+                className={layout === "camera" ? "stage-video" : "stage-video hidden"}
+                src={src(media.camera)}
+                preload="auto"
+                muted
+                playsInline
+              />
+            )}
+            {media?.mic && <audio ref={micRef} src={src(media.mic)} preload="auto" />}
+            {media?.system && <audio ref={systemRef} src={src(media.system)} preload="auto" />}
+          </div>
+          <div className="transport">
+            <IconButton
+              icon={player.playing ? Pause : Play}
+              label={player.playing ? "Pause" : "Play"}
+              shortcut="Space"
+              variant="secondary"
+              onClick={player.toggle}
+            />
+            <span className="transport-time">
+              {formatTime(player.time)} <span className="transport-total">/ {formatTime(duration)}</span>
+            </span>
+            <span className="transport-trim">
+              Keeps {formatTime(trim.start)} – {formatTime(trim.end)} ({formatTime(trim.end - trim.start)})
+            </span>
+            <Button size="sm" onClick={() => saveTrim(setEdge("start", player.time))}>
+              Start here <Kbd>I</Kbd>
+            </Button>
+            <Button size="sm" onClick={() => saveTrim(setEdge("end", player.time))}>
+              End here <Kbd>O</Kbd>
+            </Button>
+          </div>
+          <Timeline
+            duration={duration}
+            peaks={peaks}
+            time={player.time}
+            playing={player.playing}
+            trim={trim}
+            onSeek={(t) => player.seek(snap(t, fps))}
+            onTrim={(edge, t) => setEdge(edge, t)}
+            onTrimDone={() => saveTrim(trim)}
+          />
         </div>
         {settings && (
           <aside className="finish-inspector" aria-label="Finish choices">
             <section className="finish-section">
               <SectionLabel>Layout</SectionLabel>
-              <Segmented label="Layout" value={settings.layout} options={layouts} onChange={(layout) => change({ layout })} />
+              <Segmented label="Layout" value={settings.layout} options={layouts} onChange={(l) => change({ layout: l })} />
             </section>
             {session.mic && (
               <section className="finish-section">

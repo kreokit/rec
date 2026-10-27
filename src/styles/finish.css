@@ -56,3 +56,170 @@
   padding: var(--space-4);
   border-bottom: 1px solid var(--color-border);
 }
+
+.stage-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  -o-object-fit: contain;
+  object-fit: contain;
+}
+
+/* Kept playing in step, just not shown in this layout. */
+.stage-video.hidden {
+  visibility: hidden;
+}
+
+/* Transport */
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.transport-time {
+  font: var(--text-title);
+  font-variant-numeric: tabular-nums;
+}
+
+.transport-total {
+  color: var(--color-text-3);
+  font-weight: 500;
+}
+
+.transport-trim {
+  margin-left: auto;
+  font: var(--text-meta);
+  color: var(--color-text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Timeline (from KreoKit Voice) */
+
+.timeline {
+  flex: none;
+  height: var(--size-timeline);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.timeline-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 36px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.timeline-hint {
+  margin-left: auto;
+  font: var(--text-meta);
+  font-weight: 400;
+  color: var(--color-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--color-stage);
+  cursor: text;
+  touch-action: none;
+}
+
+.timeline-ruler {
+  position: relative;
+  flex: none;
+  height: 22px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.timeline-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  padding: 4px 0 0 5px;
+  border-left: 1px solid var(--color-border-strong);
+  font: 500 10px/12px var(--font-ui);
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.timeline-waveform {
+  display: block;
+  flex: 1;
+  min-height: 0;
+  pointer-events: none;
+}
+
+/* What the trim cuts off: dimmed. */
+.timeline-cut {
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  background: var(--color-backdrop);
+  pointer-events: none;
+}
+
+.timeline-handle {
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  width: 12px;
+  margin-left: -6px;
+  cursor: ew-resize;
+}
+
+.timeline-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--color-text);
+}
+
+.timeline-handle:hover::after {
+  background: var(--color-accent);
+}
+
+.timeline-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--color-accent);
+  pointer-events: none;
+}
+
+.timeline-playhead::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -4px;
+  width: 10px;
+  height: 8px;
+  background: var(--color-accent);
+  -webkit-clip-path: polygon(0 0, 100% 0, 50% 100%);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}

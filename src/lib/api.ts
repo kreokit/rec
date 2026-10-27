@@ -220,6 +220,14 @@ export interface FinishSettings {
   loudness: Loudness;
 }
 
+/** A recording's tracks (absolute paths; null when not recorded). */
+export interface Media {
+  screen: string | null;
+  camera: string | null;
+  mic: string | null;
+  system: string | null;
+}
+
 /** The test version's tests (src-tauri/src/fieldtest.rs). */
 export type FieldTest = "screen" | "region" | "window" | "sync" | "camera" | "sound";
 
@@ -305,6 +313,9 @@ export const api = {
   finishSettings: (id: string) => invoke<FinishSettings>("finish_settings", { id }),
   saveFinishSettings: (id: string, settings: FinishSettings) =>
     invoke<void>("save_finish_settings", { id, settings }),
+  recordingMedia: (id: string) => invoke<Media>("recording_media", { id }),
+  /** One level byte per 10 ms (src-tauri/src/waveform.rs). */
+  recordingWaveform: (id: string) => invoke<ArrayBuffer>("recording_waveform", { id }),
   pendingRecoveries: () => invoke<Session[]>("pending_recoveries"),
   recoverRecording: (id: string) => invoke<Session>("recover_recording", { id }),
   /** null in releases (no Tests screen). */

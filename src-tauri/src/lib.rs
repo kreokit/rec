@@ -4,6 +4,7 @@ mod awake;
 #[cfg(feature = "bench")]
 mod bench;
 mod check;
+mod decode;
 mod disk;
 mod encoder;
 mod ffmpeg;
@@ -45,6 +46,7 @@ mod sessions;
 mod synthetic;
 #[cfg(any(test, feature = "bench"))]
 mod testpattern;
+mod waveform;
 
 use std::path::PathBuf;
 
@@ -655,6 +657,43 @@ async fn recording(app: AppHandle, id: String) -> Result<Session, String> {
     .await
 }
 
+/// A recording's tracks for Finish's player (absolute paths, `None` when not recorded).
+#[derive(Serialize)]
+struct Media {
+    screen: Option<PathBuf>,
+    camera: Option<PathBuf>,
+    mic: Option<PathBuf>,
+    system: Option<PathBuf>,
+}
+
+#[tauri::command]
+async fn recording_media(app: AppHandle, id: String) -> Result<Media, String> {
+    blocking(move || {
+        let dir = recordings(&app).dir(&id)?;
+        let file = |name: &str| Some(dir.join(name)).filter(|p| p.is_file());
+        Ok(Media {
+            screen: file("screen.mp4"),
+            camera: file("camera.mp4"),
+            mic: file("mic.mp4"),
+            system: file("system.mp4"),
+        })
+    })
+    .await
+}
+
+/// The timeline's sound levels: one byte per 10 ms (waveform.rs).
+#[tauri::command]
+async fn recording_waveform(app: AppHandle, id: String) -> Result<tauri::ipc::Response, String> {
+    blocking(move || {
+        waveform::levels(&recordings(&app).dir(&id)?)
+            .map(tauri::ipc::Response::new)
+            .map_err(|_| {
+                "The sound couldn't be read for the timeline. You can still trim and export.".into()
+            })
+    })
+    .await
+}
+
 /// The recording's Finish choices (saved ones, or the first choices).
 #[tauri::command]
 async fn finish_settings(app: AppHandle, id: String) -> Result<finish::Settings, String> {
@@ -751,6 +790,8 @@ pub fn run() {
             show_recording,
             recording,
             finish_settings,
+            recording_media,
+            recording_waveform,
             save_finish_settings,
             pending_recoveries,
             recover_recording,
