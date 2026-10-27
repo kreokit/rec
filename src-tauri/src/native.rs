@@ -22,6 +22,10 @@ pub struct ScreenConfig {
     pub display_id: u32,
     /// Part of the display; `None`: all of it. `width`/`height` keep its shape.
     pub region: Option<Region>,
+    /// A window instead of the display (its id from [`windows`]); `width`/`height` keep its
+    /// shape. When it closes, the recording goes on with its last picture.
+    #[serde(default)]
+    pub window: Option<u32>,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -61,6 +65,9 @@ pub struct RecordConfig {
     /// The microphone's id (`None`: no microphone; `Some("")`: the default one).
     pub mic: Option<String>,
     pub camera: Option<CameraConfig>,
+    /// The computer's sound (macOS 13+), into system.mp4.
+    #[serde(default)]
+    pub system_audio: bool,
     pub synthetic: Option<Synthetic>,
 }
 
@@ -84,8 +91,29 @@ pub struct Status {
     pub audio_filled: i64,
     pub audio_dropped: i64,
     pub mic_peak: f32,
+    /// The computer sound (system.mp4), samples per channel; silence fills where nothing
+    /// played.
+    pub system_samples: i64,
+    pub system_filled: i64,
+    pub system_dropped: i64,
+    /// The recorded window closed; the recording shows its last picture from then.
+    pub window_closed: bool,
+    pub window_closed_at: f64,
     pub paused: bool,
     pub failed: bool,
+}
+
+/// A window that can be recorded.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Window {
+    pub id: u32,
+    pub app: String,
+    pub title: String,
+    /// In points.
+    pub width: f64,
+    pub height: f64,
+    /// Pixels per point of the display it's on.
+    pub scale: f64,
 }
 
 /// A rectangle on a display, in points from its top-left corner.
@@ -167,6 +195,7 @@ mod macos {
         region_y: f64,
         region_width: f64,
         region_height: f64,
+        window_id: u32,
         mic: c_int,
         mic_id: *const c_char,
         camera: c_int,
@@ -174,6 +203,7 @@ mod macos {
         camera_width: c_int,
         camera_height: c_int,
         camera_bitrate: c_int,
+        system_audio: c_int,
         synthetic: c_int,
         synthetic_fast: c_int,
         synthetic_static: c_int,
@@ -199,6 +229,11 @@ mod macos {
         audio_filled: i64,
         audio_dropped: i64,
         mic_peak: f32,
+        system_samples: i64,
+        system_filled: i64,
+        system_dropped: i64,
+        window_closed: c_int,
+        window_closed_at: f64,
         paused: c_int,
         failed: c_int,
     }
@@ -223,6 +258,9 @@ mod macos {
         fn kr_displays_json() -> *mut c_char;
         fn kr_mics_json() -> *mut c_char;
         fn kr_cameras_json() -> *mut c_char;
+        fn kr_windows_json() -> *mut c_char;
+        fn kr_system_audio_supported() -> c_int;
+        fn kr_window_capture_supported() -> c_int;
         fn kr_free(s: *mut c_char);
         fn kr_overlay_window(ns_window: *mut std::ffi::c_void);
         fn kr_mic_monitor_start(mic_id: *const c_char, error: *mut c_char, len: usize) -> c_int;
@@ -259,6 +297,11 @@ mod macos {
                 audio_filled: s.audio_filled,
                 audio_dropped: s.audio_dropped,
                 mic_peak: s.mic_peak,
+                system_samples: s.system_samples,
+                system_filled: s.system_filled,
+                system_dropped: s.system_dropped,
+                window_closed: s.window_closed != 0,
+                window_closed_at: s.window_closed_at,
                 paused: s.paused != 0,
                 failed: s.failed != 0,
             }
@@ -307,6 +350,7 @@ mod macos {
                 region_y: region.map_or(0.0, |r| r.y),
                 region_width: region.map_or(0.0, |r| r.width),
                 region_height: region.map_or(0.0, |r| r.height),
+                window_id: screen.and_then(|s| s.window).unwrap_or(0),
                 mic: config.mic.is_some() as c_int,
                 mic_id: mic_id.as_ptr(),
                 camera: camera.is_some() as c_int,
@@ -314,6 +358,7 @@ mod macos {
                 camera_width: camera.map_or(0, |c| c.width as c_int),
                 camera_height: camera.map_or(0, |c| c.height as c_int),
                 camera_bitrate: camera.map_or(0, |c| c.bitrate as c_int),
+                system_audio: config.system_audio as c_int,
                 synthetic: config.synthetic.is_some() as c_int,
                 synthetic_fast: synthetic.fast as c_int,
                 synthetic_static: synthetic.still_periods as c_int,
@@ -423,6 +468,21 @@ mod macos {
 
     pub fn cameras() -> Vec<Camera> {
         serde_json::from_str(&take_json(unsafe { kr_cameras_json() })).unwrap_or_default()
+    }
+
+    pub fn windows() -> Vec<Window> {
+        serde_json::from_str(&take_json(unsafe { kr_windows_json() })).unwrap_or_default()
+    }
+
+    /// The computer sound can be recorded (macOS 13+).
+    pub fn system_audio_supported() -> bool {
+        unsafe { kr_system_audio_supported() != 0 }
+    }
+
+    /// Windows can be recorded (macOS 12.3+; whether it's reliable on 12 is measured, see
+    /// docs/m3-results.md).
+    pub fn window_capture_supported() -> bool {
+        unsafe { kr_window_capture_supported() != 0 }
     }
 
     /// Opens the microphone for the level meter (no recording).
@@ -541,6 +601,15 @@ mod other {
     pub fn cameras() -> Vec<Camera> {
         Vec::new()
     }
+    pub fn windows() -> Vec<Window> {
+        Vec::new()
+    }
+    pub fn system_audio_supported() -> bool {
+        false
+    }
+    pub fn window_capture_supported() -> bool {
+        false
+    }
     pub fn monitor_start(_mic_id: &str) -> Result<(), String> {
         Err(NOT_YET.into())
     }
@@ -592,6 +661,7 @@ pub(crate) mod tests {
             screen: Some(ScreenConfig {
                 display_id: 0,
                 region: None,
+                window: None,
                 width,
                 height,
                 fps: 30,
@@ -606,6 +676,7 @@ pub(crate) mod tests {
                 height: CAMERA_H,
                 bitrate: 1_000_000,
             }),
+            system_audio: false,
             synthetic: Some(Synthetic {
                 fast: true,
                 still_periods: still,
@@ -850,6 +921,68 @@ pub(crate) mod tests {
         for (x, y) in [(2, 200), (637, 200), (320, 357), (2, 357), (637, 357)] {
             assert!(luma(x, y).abs_diff(128) < 12, "{x},{y}: {}", luma(x, y));
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn records_the_computer_sound() {
+        let _timing = alongside();
+        // The made-up computer sound clicks with the mic: stereo AAC in system.mp4, as long
+        // as the picture, each click on its whole second.
+        let dir = temp_dir("system");
+        let mut config = synthetic(dir.clone(), 640, 360, false);
+        config.system_audio = true;
+        let rec = Recorder::start(&config).unwrap();
+        wait_for(&rec, 5.0);
+        let (status, error) = rec.stop();
+        assert_eq!(error, None);
+        assert_eq!((status.system_filled, status.system_dropped), (0, 0));
+        let video = status.frames as f64 / 30.0;
+        let sound = status.system_samples as f64 / 48_000.0;
+        assert!((video - sound).abs() <= 1.0 / 30.0, "{video} vs {sound}");
+        let info = crate::probe::probe(&dir.join("system.mp4")).unwrap();
+        let audio = info.audio().unwrap();
+        assert_eq!(
+            (audio.codec.as_str(), audio.sample_rate, audio.channels),
+            ("aac", Some(48_000), Some(2))
+        );
+        let (samples, start) = crate::testpattern::read_audio(&dir.join("system.mp4")).unwrap();
+        let clicks = crate::testpattern::onsets(&samples, start, 0.1, 0.3);
+        assert!(clicks.len() >= 4, "{clicks:?}");
+        for c in &clicks {
+            assert!((c - c.round()).abs() <= 1.0 / 30.0, "{clicks:?}");
+        }
+        let report = crate::check::check(&dir, Some(&status), 30);
+        assert!(report.problems.is_empty(), "{report:?}");
+        assert!(report.system.is_some(), "{report:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_closed_window_keeps_its_last_picture() {
+        let _timing = alongside();
+        // The made-up window closes 2 s in: the recording goes on to the stop with its last
+        // picture, and the check says when the window closed.
+        let dir = temp_dir("window");
+        let mut config = synthetic(dir.clone(), 640, 400, false);
+        config.screen.as_mut().unwrap().window = Some(7);
+        let rec = Recorder::start(&config).unwrap();
+        wait_for(&rec, 5.0);
+        let (status, error) = rec.stop();
+        assert_eq!(error, None);
+        assert!(status.window_closed, "{status:?}");
+        assert!((status.window_closed_at - 2.0).abs() < 0.1, "{status:?}");
+        assert!(status.frames as f64 >= 5.0 * 30.0 - 1.0, "{status:?}");
+        assert!(status.frames_repeated as f64 >= 2.9 * 30.0, "{status:?}");
+        let report = crate::check::check(&dir, Some(&status), 30);
+        assert!(report.problems.is_empty(), "{report:?}");
+        assert!(
+            report
+                .notes
+                .iter()
+                .any(|n| n.starts_with("The window closed at 0:02")),
+            "{report:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

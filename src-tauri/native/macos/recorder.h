@@ -1,7 +1,7 @@
 // KreoKit Rec's macOS recorder (recorder.m), called from Rust (src/native.rs).
 //
 // One recording = one folder with one fragmented MP4 per source (screen.mp4, camera.mp4,
-// mic.mp4), all on the host clock (docs/capture-research.md). The screen is captured at
+// mic.mp4, system.mp4 for the computer sound), all on the host clock (docs/capture-research.md). The screen is captured at
 // capture_fps, the camera at its own fixed fps; for each, one frame is kept per output frame
 // slot (1/fps): the newest frame captured before the slot's middle, or the previous picture
 // again when nothing new arrived.
@@ -28,18 +28,25 @@ typedef struct {
     // Part of the display, in points from its top-left corner; width 0: the whole display.
     // The output size above keeps the region's shape.
     double region_x, region_y, region_width, region_height;
+    // A window instead of the display (ScreenCaptureKit, macOS 12.3+): its CGWindowID; 0: none.
+    // The output size above is the window's shape. When it closes, the recording goes on with
+    // its last picture (KrRecStatus.window_closed).
+    uint32_t window_id;
     int mic;             // 1: record a microphone
     const char *mic_id;  // AVCaptureDevice uniqueID; NULL or "": the default microphone
     int camera;                       // 1: record a camera
     const char *camera_id;            // AVCaptureDevice uniqueID; NULL or "": the default camera
     int camera_width, camera_height;  // output size (even; the camera's own shape, kr_cameras_json)
     int camera_bitrate;               // bits per second
+    // 1: record the computer's sound (ScreenCaptureKit, macOS 13+) into system.mp4, AAC stereo.
+    int system_audio;
     // Tests: generated sources instead of real devices (a frame counter on the screen and
     // the camera, a click every second on the mic, see recorder.m). synthetic_fast runs them as fast as
     // the encoder allows on their own clock (a simulated hour in minutes);
     // synthetic_static freezes the picture for 2 s of every 10 s (nothing changes on screen);
     // synthetic_late_start sends the camera's first picture 1 s and the mic's first sound
-    // 0.4 s after the start, as real devices do.
+    // 0.4 s after the start, as real devices do. With a window_id, the synthetic window
+    // "closes" 2 s after the start. The synthetic computer sound clicks with the mic.
     int synthetic;
     int synthetic_fast;
     int synthetic_static;
@@ -60,6 +67,10 @@ typedef struct {
     int64_t audio_filled;    // samples of silence written where the microphone sent nothing
     int64_t audio_dropped;   // samples dropped (overlapping or the encoder couldn't keep up)
     float mic_peak;          // peak of the last 100 ms of the microphone, 0..1
+    // The same for system.mp4 (stereo: per channel). Silence fills where nothing played.
+    int64_t system_samples, system_filled, system_dropped;
+    int window_closed;       // the recorded window closed (or can't be recorded any more)
+    double window_closed_at; // ... at this point of the recording, in seconds
     int paused;
     int failed; // a source or file failed; kr_rec_stop returns the message
 } KrRecStatus;
@@ -73,6 +84,11 @@ void kr_rec_status(void *rec, KrRecStatus *status);
 // Stops, finishes the files and frees `rec`. Writes the final status; returns 0, or -1
 // with a message in `error` (the files are still finished as far as possible).
 int kr_rec_stop(void *rec, KrRecStatus *status, char *error, size_t error_len);
+
+// What this Mac can record: 1 when the computer sound can be recorded (macOS 13+), and
+// 1 when windows can be recorded (macOS 12.3+).
+int kr_system_audio_supported(void);
+int kr_window_capture_supported(void);
 
 // The region overlay window (window.m): above the menu bar and the Dock. Main thread only.
 void kr_overlay_window(void *ns_window);
@@ -96,6 +112,10 @@ int kr_request_camera_access(void);
 char *kr_displays_json(void);
 char *kr_mics_json(void);
 char *kr_cameras_json(void);
+// Windows that can be recorded (on screen, normal level, at least 64 points each way, not
+// this app's): [{"id", "app", "title", "width", "height" (points), "scale" (pixels per point)}].
+// Needs the Screen Recording permission; "[]" without it or before macOS 12.3.
+char *kr_windows_json(void);
 void kr_free(char *s);
 
 // The level meter on the setup screen: opens the microphone without recording.

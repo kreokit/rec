@@ -51,6 +51,9 @@ pub struct ScreenInfo {
     /// Part of the display (points); `None`: all of it.
     #[serde(default)]
     pub region: Option<Region>,
+    /// A window instead ("App – Title"); `None`: the display.
+    #[serde(default)]
+    pub window: Option<String>,
     pub width: u32,
     pub height: u32,
     pub fps: u32,
@@ -75,6 +78,9 @@ pub struct Session {
     pub mic: Option<String>,
     #[serde(default)]
     pub camera: Option<CameraInfo>,
+    /// The computer's sound was recorded too (system.mp4).
+    #[serde(default)]
+    pub system_audio: bool,
     /// Seconds recorded (pauses excluded); while recording, as of the last heartbeat.
     pub elapsed_s: f64,
     pub pauses: u32,
@@ -115,6 +121,24 @@ pub struct Options {
     /// Part of the display; `None`: all of it.
     #[serde(default)]
     pub region: Option<Region>,
+    /// A window instead of the display.
+    #[serde(default)]
+    pub window: Option<WindowChoice>,
+    /// The computer's sound (macOS 13+).
+    #[serde(default)]
+    pub system_audio: bool,
+}
+
+/// The window the setup screen chose (`Window` in native.rs).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowChoice {
+    pub id: u32,
+    /// "App – Title", for the user.
+    pub name: String,
+    /// In points, and the display's pixels per point.
+    pub width: f64,
+    pub height: f64,
+    pub scale: f64,
 }
 
 /// The smallest region, in points each way.
@@ -165,9 +189,24 @@ pub fn video_bitrate(width: u32, height: u32) -> u32 {
 }
 
 /// The expected file size per minute: screen + camera (`None`: off) + 128 kbit/s sound.
-pub fn bytes_per_minute(width: u32, height: u32, camera: Option<(u32, u32)>, mic: bool) -> u64 {
+pub fn bytes_per_minute(
+    width: u32,
+    height: u32,
+    camera: Option<(u32, u32)>,
+    mic: bool,
+    system_audio: bool,
+) -> u64 {
     let camera = camera.map_or(0, |(w, h)| video_bitrate(w, h) as u64);
-    (video_bitrate(width, height) as u64 + camera + if mic { 128_000 } else { 0 }) / 8 * 60
+    let sound = if mic { 128_000 } else { 0 } + if system_audio { 256_000 } else { 0 };
+    (video_bitrate(width, height) as u64 + camera + sound) / 8 * 60
+}
+
+/// A window's size in pixels, as big as it is on screen.
+pub fn window_size(w: &WindowChoice) -> (u32, u32) {
+    (
+        (w.width * w.scale).round().max(2.0) as u32,
+        (w.height * w.scale).round().max(2.0) as u32,
+    )
 }
 
 /// A running recording as the backend sees it (native.rs, or a fake in tests).
@@ -326,7 +365,8 @@ impl Recordings {
             id = format!("{}-{n}", folder_name(created_at));
             n += 1;
         }
-        if let Some(r) = options.region
+        if options.window.is_none()
+            && let Some(r) = options.region
             && (r.width < MIN_REGION || r.height < MIN_REGION)
         {
             return Err(format!(
@@ -335,12 +375,27 @@ impl Recordings {
         }
         let dir = self.root.join(&id);
         fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        let (source_w, source_h) = source_size(
-            options.display_width,
-            options.display_height,
-            options.display_points_width,
-            options.region,
-        );
+        if options.system_audio
+            && self.synthetic.is_none()
+            && !crate::native::system_audio_supported()
+        {
+            return Err("Recording the computer sound needs macOS 13 or newer. Turn it off, then record again.".into());
+        }
+        let window = options.window.as_ref();
+        let region = if window.is_some() {
+            None
+        } else {
+            options.region
+        };
+        let (source_w, source_h) = match window {
+            Some(w) => window_size(w),
+            None => source_size(
+                options.display_width,
+                options.display_height,
+                options.display_points_width,
+                region,
+            ),
+        };
         let (width, height) = output_size(source_w, source_h, options.quality);
         let camera = options
             .camera_id
@@ -352,7 +407,8 @@ impl Recordings {
             state: State::Recording,
             screen: Some(ScreenInfo {
                 display: options.display_name.clone(),
-                region: options.region,
+                region,
+                window: window.map(|w| w.name.clone()),
                 width,
                 height,
                 fps: 30,
@@ -371,6 +427,7 @@ impl Recordings {
                 width,
                 height,
             }),
+            system_audio: options.system_audio,
             elapsed_s: 0.0,
             pauses: 0,
             check: None,
@@ -382,7 +439,8 @@ impl Recordings {
             dir: dir.clone(),
             screen: Some(ScreenConfig {
                 display_id: options.display_id,
-                region: options.region,
+                region,
+                window: window.map(|w| w.id),
                 width,
                 height,
                 fps: 30,
@@ -397,6 +455,7 @@ impl Recordings {
                 height,
                 bitrate: video_bitrate(width, height),
             }),
+            system_audio: options.system_audio,
             synthetic,
         };
         let capture = match self.backend.start(&config) {
@@ -723,6 +782,8 @@ pub mod tests {
             camera_height: 0,
             display_points_width: 1440.0,
             region: None,
+            window: None,
+            system_audio: false,
         }
     }
 
@@ -745,10 +806,10 @@ pub mod tests {
         assert_eq!(output_size(5120, 1440, 1080), (3840, 1080));
         assert_eq!(output_size(1366, 768, 720), (1280, 720));
         // About 55 MB a minute at 1728x1080 with the microphone.
-        let mb = bytes_per_minute(1728, 1080, None, true) / 1_000_000;
+        let mb = bytes_per_minute(1728, 1080, None, true, false) / 1_000_000;
         assert!((50..60).contains(&mb), "{mb}");
         // The camera at 720p adds about 27 MB.
-        let mb = bytes_per_minute(1728, 1080, Some((1280, 720)), true) / 1_000_000;
+        let mb = bytes_per_minute(1728, 1080, Some((1280, 720)), true, false) / 1_000_000;
         assert!((78..88).contains(&mb), "{mb}");
         assert_eq!(camera_size(1280, 720), (1280, 720));
         assert_eq!(camera_size(640, 480), (640, 480));

@@ -17,10 +17,11 @@ use crate::probe::{self, MediaInfo};
 const AAC_FRAME_S: f64 = 1024.0 / 48_000.0;
 
 /// Every track a recording can have: file, picture or sound, and its name for the user.
-pub const TRACKS: [(&str, bool, &str); 3] = [
+pub const TRACKS: [(&str, bool, &str); 4] = [
     ("screen.mp4", true, "screen"),
     ("camera.mp4", true, "camera"),
     ("mic.mp4", false, "microphone"),
+    ("system.mp4", false, "computer sound"),
 ];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,6 +47,8 @@ pub struct Check {
     pub screen: Option<TrackCheck>,
     pub camera: Option<TrackCheck>,
     pub mic: Option<TrackCheck>,
+    /// The computer sound.
+    pub system: Option<TrackCheck>,
     /// Sound minus picture (the screen, or the camera without one) at the start and at the
     /// end, in ms.
     pub start_offset_ms: Option<f64>,
@@ -53,6 +56,9 @@ pub struct Check {
     /// Camera minus screen at the start and at the end, in ms.
     pub camera_start_offset_ms: Option<f64>,
     pub camera_end_offset_ms: Option<f64>,
+    /// Computer sound minus picture at the start and at the end, in ms.
+    pub system_start_offset_ms: Option<f64>,
+    pub system_end_offset_ms: Option<f64>,
     /// The recorder's own counts (not known after a recovery).
     pub recorder: Option<Status>,
     /// What is wrong with the recording, for the user.
@@ -69,7 +75,7 @@ impl Check {
 
     /// The tracks that can be played.
     pub fn tracks(&self) -> impl Iterator<Item = &TrackCheck> {
-        [&self.screen, &self.camera, &self.mic]
+        [&self.screen, &self.camera, &self.mic, &self.system]
             .into_iter()
             .flatten()
     }
@@ -79,6 +85,7 @@ impl Check {
         match file {
             "screen.mp4" => self.screen.as_ref(),
             "camera.mp4" => self.camera.as_ref(),
+            "system.mp4" => self.system.as_ref(),
             _ => self.mic.as_ref(),
         }
     }
@@ -87,6 +94,7 @@ impl Check {
         match file {
             "screen.mp4" => &mut self.screen,
             "camera.mp4" => &mut self.camera,
+            "system.mp4" => &mut self.system,
             _ => &mut self.mic,
         }
     }
@@ -173,6 +181,23 @@ pub fn check(dir: &Path, status: Option<&Status>, fps: u32) -> Check {
         }
     }
 
+    // The computer sound starts with the picture; it ends with it after a normal stop (the
+    // recorder fills it with silence to the end), but may end early after a recovery.
+    if let (Some(p), Some(y)) = (c.screen.as_ref().or(c.camera.as_ref()), &c.system) {
+        let start = y.start_s - p.start_s;
+        let end = y.end_s() - p.end_s();
+        c.system_start_offset_ms = Some(round_ms(start));
+        c.system_end_offset_ms = Some(round_ms(end));
+        let end_off = status.is_some() && end.abs() > frame + AAC_FRAME_S + 1e-3;
+        if start.abs() > frame + 1e-3 || end_off {
+            c.problems.push(format!(
+                "Picture and computer sound don't line up: the sound starts {:+.0} ms and ends {:+.0} ms from the picture.",
+                start * 1000.0,
+                end * 1000.0
+            ));
+        }
+    }
+
     // A capture that records black (a region through CGDisplayStream's source rectangle
     // on macOS 12 did, 2026-10-27; a missing permission can too) must not pass unnoticed.
     if let Some(s) = &c.screen
@@ -220,6 +245,20 @@ pub fn check(dir: &Path, status: Option<&Status>, fps: u32) -> Check {
         if filled >= 0.05 {
             c.notes.push(format!(
                 "The microphone sent no sound for {filled:.1} s; silence fills that time so the sound stays in sync."
+            ));
+        }
+        let system = st.system_dropped as f64 / 48_000.0;
+        if system >= 0.05 {
+            c.notes.push(format!(
+                "{system:.1} s of computer sound couldn't be saved in time (the computer was busy)."
+            ));
+        }
+        if st.window_closed {
+            let at = st.window_closed_at.max(0.0) as u64;
+            c.notes.push(format!(
+                "The window closed at {}:{:02}; the recording shows its last picture from there.",
+                at / 60,
+                at % 60
             ));
         }
         let dropped = st.audio_dropped as f64 / 48_000.0;

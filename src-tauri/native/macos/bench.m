@@ -3,7 +3,7 @@
 // Started as the app bundle (`open -n "KreoKit Rec Test.app" --args --bench ...`) so macOS
 // asks for permission for the app itself; `rec --bench-analyze DIR` reads the results.
 //
-//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60] [--mic] [--camera] [--region]
+//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60] [--mic] [--camera] [--region|--window]
 //       A small window shows the test pattern of src/testpattern.rs: a counter that steps
 //       60 times a second and stands still for 2 s of every 10 s. The recording shows
 //       whether every output frame caught the newest picture (fresh), repeated it because
@@ -12,7 +12,8 @@
 //       use is reported too. --region records only a region around the window (24 points
 //       on each side) at the display's own pixels, as the app does (the whole display is
 //       captured at full size and the region cut out), so reading the counter back checks
-//       that the crop is the right part of the screen.
+//       that the crop is the right part of the screen. --window records the counter window
+//       itself as a window (ScreenCaptureKit, macOS 12.3+), at the display's own pixels.
 //   --bench sync --out DIR [--seconds 45]
 //       The tap test for sound against picture. The window waits in front of everything
 //       until the user clicks it and presses space; that first press starts the
@@ -139,7 +140,7 @@ int kr_bench_main(int argc, const char **argv) {
         NSString *mode = nil, *out = nil, *api = @"auto";
         double seconds = 0;
         int captureFps = 60;
-        BOOL mic = NO, camera = NO, region = NO;
+        BOOL mic = NO, camera = NO, region = NO, windowCapture = NO;
         for (int i = 1; i < argc; i++) {
             const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : "";
             if (!strcmp(a, "--bench")) mode = @(v), i++;
@@ -150,6 +151,7 @@ int kr_bench_main(int argc, const char **argv) {
             else if (!strcmp(a, "--mic")) mic = YES;
             else if (!strcmp(a, "--camera")) camera = YES;
             else if (!strcmp(a, "--region")) region = YES;
+            else if (!strcmp(a, "--window")) windowCapture = YES;
         }
         if ([mode isEqual:@"check"]) {
             // What this app may record, and the devices it sees (no recording).
@@ -163,7 +165,7 @@ int kr_bench_main(int argc, const char **argv) {
         }
         BOOL sync = [mode isEqual:@"sync"], clap = [mode isEqual:@"camera"];
         if (!out || !(sync || clap || [mode isEqual:@"fresh"])) {
-            fprintf(stderr, "usage: --bench fresh|sync|camera --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic] [--camera] [--region]\n");
+            fprintf(stderr, "usage: --bench fresh|sync|camera --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic] [--camera] [--region|--window]\n");
             return 2;
         }
         if (seconds <= 0) seconds = sync || clap ? 45 : 60;
@@ -232,6 +234,17 @@ int kr_bench_main(int argc, const char **argv) {
                 left = m;
                 top = m;
             }
+            if (windowCapture) {
+                // The window alone, at the display's own pixels: the pattern fills it.
+                scale = screen.backingScaleFactor;
+                w = (int)(frame.size.width * scale) & ~1;
+                h = (int)(frame.size.height * scale) & ~1;
+                info[@"width"] = @(w);
+                info[@"height"] = @(h);
+                info[@"window"] = @(window.windowNumber);
+                left = 0;
+                top = 0;
+            }
             info[@"pattern"] = @{@"x" : @(left * scale), @"y" : @(top * scale), @"cell" : @(cellPt * scale), @"rate" : @(kRate), @"still_periods" : @YES};
         }
 
@@ -248,6 +261,7 @@ int kr_bench_main(int argc, const char **argv) {
         cfg.region_y = area.origin.y;
         cfg.region_width = area.size.width;
         cfg.region_height = area.size.height;
+        cfg.window_id = windowCapture ? (uint32_t)window.windowNumber : 0;
         cfg.mic = mic;
         cfg.screen = !clap;
         cfg.camera = camera;

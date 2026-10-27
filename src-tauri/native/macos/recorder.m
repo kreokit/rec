@@ -238,6 +238,32 @@ static void setError(char *error, size_t len, NSString *message) {
 }
 @end
 
+// One sound track (the microphone, the computer sound): 48 kHz float samples, interleaved
+// when stereo, placed on the output timeline by their host time.
+@interface KRAudioTrack : NSObject {
+  @public
+    KRWriter *w;
+    int channels;
+    CMAudioFormatDescriptionRef format;
+    int64_t next;                    // next output sample (per channel)
+    int64_t samples, filled, dropped; // written; silence for a gap; dropped (overlap)
+}
+@end
+@implementation KRAudioTrack
++ (instancetype)trackWith:(KRWriter *)w channels:(int)channels {
+    KRAudioTrack *a = [KRAudioTrack new];
+    a->w = w;
+    a->channels = channels;
+    UInt32 bytes = 4 * (UInt32)channels;
+    AudioStreamBasicDescription asbd = {kRate, kAudioFormatLinearPCM, kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked, bytes, 1, bytes, (UInt32)channels, 32, 0};
+    CMAudioFormatDescriptionCreate(NULL, &asbd, 0, NULL, 0, NULL, NULL, &a->format);
+    return a;
+}
+- (void)dealloc {
+    if (format) CFRelease(format);
+}
+@end
+
 static NSDictionary *h264Settings(int w, int h, int fps, int bitrate) {
     return @{
         AVVideoCodecKey : AVVideoCodecTypeH264,
@@ -259,8 +285,8 @@ static NSDictionary *h264Settings(int w, int h, int fps, int bitrate) {
     };
 }
 
-static NSDictionary *aacSettings(void) {
-    return @{AVFormatIDKey : @(kAudioFormatMPEG4AAC), AVSampleRateKey : @(kRate), AVNumberOfChannelsKey : @1, AVEncoderBitRateKey : @128000};
+static NSDictionary *aacSettings(int channels) {
+    return @{AVFormatIDKey : @(kAudioFormatMPEG4AAC), AVSampleRateKey : @(kRate), AVNumberOfChannelsKey : @(channels), AVEncoderBitRateKey : @(channels * 128000)};
 }
 
 // Timestamps from an AVCaptureSession are on its own clock; everything else uses host time.
@@ -338,16 +364,16 @@ static NSDictionary *floatMonoSettings(void) {
     double stopAt;
     KRPacer *screenP, *cameraP;
     // Audio.
-    int64_t audioNext; // next output sample
+    KRAudioTrack *micA, *systemA;
     float peakNow, peakPrev;
     int64_t peakCount;
-    CMAudioFormatDescriptionRef pcmFormat;
     KrRecStatus st;
     NSString *error;
-    KRWriter *screenW, *cameraW, *micW;
+    KRWriter *screenW, *cameraW, *micW, *systemW;
     // Sources.
     CGDisplayStreamRef cgd;
-    id scStream, scOutput;
+    id scStream, scAudioStream;         // the screen or window; the computer sound alone
+    NSMutableArray *scOutputs;          // their outputs (the streams hold them weakly)
     AVCaptureSession *micSession, *cameraSession;
     dispatch_source_t timer, syncTimer;
     // Synthetic sources.
@@ -364,7 +390,8 @@ static NSDictionary *floatMonoSettings(void) {
 
 @interface KRRecorder (Pacer)
 - (void)ingest:(CVPixelBufferRef)pb at:(double)t into:(KRPacer *)p;
-- (void)audio:(const float *)s count:(int64_t)n at:(double)h;
+- (void)systemAudio:(CMSampleBufferRef)sb;
+- (double)now;
 @end
 
 #pragma mark - SCK output (macOS 12.3+)
@@ -372,12 +399,19 @@ static NSDictionary *floatMonoSettings(void) {
 API_AVAILABLE(macos(12.3))
 @interface KRStreamOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, weak) KRRecorder *rec;
+@property(nonatomic) BOOL screen; // NO: the stream only carries the computer sound
 @end
 
 @implementation KRStreamOutput
 // Frames whose status isn't "complete" (idle: nothing changed) carry no new picture.
 - (void)stream:(SCStream *)stream didOutputSampleBuffer:(CMSampleBufferRef)sb ofType:(SCStreamOutputType)type {
-    if (type != SCStreamOutputTypeScreen) return;
+    if (@available(macOS 13.0, *)) {
+        if (type == SCStreamOutputTypeAudio) {
+            [self.rec systemAudio:sb];
+            return;
+        }
+    }
+    if (type != SCStreamOutputTypeScreen || !self.screen) return;
     CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sb, false);
     if (!attachments || CFArrayGetCount(attachments) == 0) return;
     NSDictionary *info = (__bridge NSDictionary *)CFArrayGetValueAtIndex(attachments, 0);
@@ -389,8 +423,19 @@ API_AVAILABLE(macos(12.3))
 
 - (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
     KRRecorder *rec = self.rec;
+    BOOL screen = self.screen;
     dispatch_async(rec->q, ^{
-        if (!rec->error) rec->error = [NSString stringWithFormat:@"Screen recording stopped (%@). Your recording up to now is kept.", error.localizedDescription];
+        // A recorded window that closes: the recording goes on with its last picture.
+        if (screen && rec->cfg.window_id) {
+            if (!rec->st.window_closed) {
+                rec->st.window_closed = 1;
+                rec->st.window_closed_at = MAX(0.0, [rec now] - rec->t0 - rec->pausedTotal);
+            }
+            return;
+        }
+        if (!rec->error)
+            rec->error = screen ? [NSString stringWithFormat:@"Screen recording stopped (%@). Your recording up to now is kept.", error.localizedDescription]
+                                : [NSString stringWithFormat:@"Recording the computer sound stopped (%@). Your recording up to now is kept.", error.localizedDescription];
         rec->st.failed = 1;
     });
 }
@@ -407,6 +452,18 @@ static void regionCapture(const KrRecConfig *c, CGSize displayPoints, size_t *wi
     double x = MIN(llround(c->region_x * s) & ~1LL, (long long)*width - c->width);
     double y = MIN(llround(c->region_y * s) & ~1LL, (long long)*height - c->height);
     *crop = CGRectMake(MAX(x, 0), MAX(y, 0), c->width, c->height);
+}
+
+// What ScreenCaptureKit may record (nil without the permission). Blocks up to 10 s.
+static SCShareableContent *shareableContent(BOOL onScreenOnly) API_AVAILABLE(macos(12.3)) {
+    dispatch_semaphore_t got = dispatch_semaphore_create(0);
+    __block SCShareableContent *content = nil;
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:onScreenOnly completionHandler:^(SCShareableContent *c, NSError *e) {
+        content = c;
+        dispatch_semaphore_signal(got);
+    }];
+    dispatch_semaphore_wait(got, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+    return content;
 }
 
 @implementation KRRecorder
@@ -551,15 +608,15 @@ static void regionCapture(const KrRecConfig *c, CGSize displayPoints, size_t *wi
     }
 }
 
-- (void)writeAudio:(const float *)s count:(int64_t)n {
-    if (!micW || n <= 0) return;
-    size_t bytes = (size_t)n * sizeof(float);
+- (void)writeAudio:(const float *)s count:(int64_t)n into:(KRAudioTrack *)a {
+    if (n <= 0) return;
+    size_t bytes = (size_t)n * a->channels * sizeof(float);
     CMBlockBufferRef block = NULL;
     if (CMBlockBufferCreateWithMemoryBlock(NULL, NULL, bytes, NULL, NULL, 0, bytes, kCMBlockBufferAssureMemoryNowFlag, &block) != noErr) return;
     if (s) CMBlockBufferReplaceDataBytes(s, block, 0, bytes);
     else CMBlockBufferFillDataBytes(0, block, 0, bytes);
     CMSampleBufferRef sb = NULL;
-    CMAudioSampleBufferCreateReadyWithPacketDescriptions(NULL, block, pcmFormat, (CMItemCount)n, CMTimeMake(audioNext, kRate), NULL, &sb);
+    CMAudioSampleBufferCreateReadyWithPacketDescriptions(NULL, block, a->format, (CMItemCount)n, CMTimeMake(a->next, kRate), NULL, &sb);
     CFRelease(block);
     if (!sb) return;
     KRItem *item = [KRItem new];
@@ -567,8 +624,14 @@ static void regionCapture(const KrRecConfig *c, CGSize displayPoints, size_t *wi
     item->samples = n;
     // A full queue drops the samples (the writer counts them) but keeps their place, so
     // what follows stays in sync.
-    if ([micW enqueue:item]) st.audio_samples += n;
-    audioNext += n;
+    if ([a->w enqueue:item]) a->samples += n;
+    a->next += n;
+}
+
+// Silence up to output sample `end`, not counted as a gap (the end of a track: the computer
+// sound sends nothing while nothing plays; the picture's last slot).
+- (void)pad:(KRAudioTrack *)a to:(int64_t)end {
+    while (a && a->next < end) [self writeAudio:NULL count:MIN(end - a->next, kRate / 10) into:a];
 }
 
 // Time removed by the pauses that ended before host time h.
@@ -587,12 +650,15 @@ static void regionCapture(const KrRecConfig *c, CGSize displayPoints, size_t *wi
     return YES;
 }
 
-// Microphone samples starting at host time h: cut at the start, the pauses and the stop,
-// and placed on the output timeline right after the previous ones. A real gap (the
-// microphone sent nothing) becomes silence, so the sound never slides against the picture.
-- (void)audio:(const float *)s count:(int64_t)n at:(double)h {
+- (void)micAudio:(const float *)s count:(int64_t)n at:(double)h {
     [self levelOf:s count:n];
-    if (!micW) return;
+    if (micA) [self audio:s count:n at:h into:micA];
+}
+
+// Samples starting at host time h: cut at the start, the pauses and the stop, and placed on
+// the output timeline right after the previous ones. A real gap (the source sent nothing)
+// becomes silence, so the sound never slides against the picture.
+- (void)audio:(const float *)s count:(int64_t)n at:(double)h into:(KRAudioTrack *)a {
     int64_t i = 0;
     while (i < n) {
         while (i < n && ![self keepsSampleAt:h + (double)i / kRate]) i++;
@@ -602,21 +668,48 @@ static void regionCapture(const KrRecConfig *c, CGSize displayPoints, size_t *wi
         double hs = h + (double)start / kRate;
         int64_t pos = llround((hs - t0 - [self pausedBefore:hs]) * kRate);
         int64_t skip = 0;
-        if (pos > audioNext + kAudioTolerance) {
-            int64_t gap = pos - audioNext;
-            // Before the first sound it's the mic starting up, not a gap to report.
-            if (audioNext > 0) st.audio_filled += gap;
-            while (gap > 0) {
-                int64_t part = MIN(gap, kRate / 10);
-                [self writeAudio:NULL count:part];
-                gap -= part;
-            }
-        } else if (pos < audioNext - kAudioTolerance) {
-            skip = MIN(audioNext - pos, i - start);
-            st.audio_dropped += skip;
+        if (pos > a->next + kAudioTolerance) {
+            // Before the first sound it's the source starting up, not a gap to report.
+            if (a->next > 0) a->filled += pos - a->next;
+            [self pad:a to:pos];
+        } else if (pos < a->next - kAudioTolerance) {
+            skip = MIN(a->next - pos, i - start);
+            a->dropped += skip;
         }
-        [self writeAudio:s + start + skip count:i - start - skip];
+        [self writeAudio:s + (start + skip) * a->channels count:i - start - skip into:a];
     }
+}
+
+// The computer sound from ScreenCaptureKit: float, one buffer per channel (or interleaved).
+- (void)systemAudio:(CMSampleBufferRef)sb {
+    if (!systemA) return;
+    const AudioStreamBasicDescription *f = CMAudioFormatDescriptionGetStreamBasicDescription(CMSampleBufferGetFormatDescription(sb));
+    if (!f || !(f->mFormatFlags & kAudioFormatFlagIsFloat) || f->mBitsPerChannel != 32) return;
+    size_t size = 0;
+    CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, &size, NULL, 0, NULL, NULL, 0, NULL);
+    AudioBufferList *list = malloc(size);
+    CMBlockBufferRef block = NULL;
+    if (!list || CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(sb, NULL, list, size, NULL, NULL, 0, &block) != noErr) {
+        free(list);
+        return;
+    }
+    int64_t n = CMSampleBufferGetNumSamples(sb);
+    float *stereo = malloc((size_t)n * 2 * sizeof(float));
+    const float *l = list->mBuffers[0].mData;
+    if (list->mNumberBuffers >= 2) {
+        const float *r = list->mBuffers[1].mData;
+        for (int64_t i = 0; i < n; i++) stereo[2 * i] = l[i], stereo[2 * i + 1] = r[i];
+    } else if (list->mBuffers[0].mNumberChannels >= 2) {
+        UInt32 c = list->mBuffers[0].mNumberChannels;
+        for (int64_t i = 0; i < n; i++) stereo[2 * i] = l[i * c], stereo[2 * i + 1] = l[i * c + 1];
+    } else {
+        for (int64_t i = 0; i < n; i++) stereo[2 * i] = stereo[2 * i + 1] = l[i];
+    }
+    // ScreenCaptureKit's timestamps are on the host clock.
+    [self audio:stereo count:n at:CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sb)) into:systemA];
+    free(stereo);
+    CFRelease(block);
+    free(list);
 }
 
 - (void)captureOutput:(AVCaptureOutput *)output didOutputSampleBuffer:(CMSampleBufferRef)sb fromConnection:(AVCaptureConnection *)connection {
@@ -626,7 +719,7 @@ static void regionCapture(const KrRecConfig *c, CGSize displayPoints, size_t *wi
         return;
     }
     double h = hostTimeOf(sb, micSession);
-    withSamples(sb, ^(const float *s, int64_t n) { [self audio:s count:n at:h]; });
+    withSamples(sb, ^(const float *s, int64_t n) { [self micAudio:s count:n at:h]; });
 }
 
 // The camera's own queue was full (we were too slow to take a picture).
@@ -677,13 +770,14 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
     double base = t0 - 0.5;
     int64_t chunk = kRate / cfps;
     float *audio = calloc((size_t)chunk, sizeof(float));
+    float *stereo = calloc((size_t)chunk * 2, sizeof(float));
     for (int64_t i = 0;; i++) {
         double t = base + (double)i / cfps;
         if (cfg.synthetic_fast) {
             atomic_store(&synthNow, t);
             // The encoder sets the pace: wait while half a second is queued.
             while ((screenW && atomic_load(&screenW->queued) > screenW->limit / 2) || (cameraW && atomic_load(&cameraW->queued) > cameraW->limit / 2) ||
-                   (micW && atomic_load(&micW->queued) > micW->limit / 2))
+                   (micW && atomic_load(&micW->queued) > micW->limit / 2) || (systemW && atomic_load(&systemW->queued) > systemW->limit / 2))
                 usleep(500);
         } else {
             double wait = t - hostSeconds();
@@ -703,8 +797,17 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
                 double frac = ts - floor(ts);
                 audio[k] = (ts >= 0 && frac < 0.005) ? 0.5f : 0.0f;
             }
-            if (!self->cfg.synthetic_late_start || t >= self->t0 + kMicWarmUp) [self audio:audio count:chunk at:t];
-            if (self->screenW && !frozen) {
+            if (!self->cfg.synthetic_late_start || t >= self->t0 + kMicWarmUp) [self micAudio:audio count:chunk at:t];
+            if (self->systemA) {
+                for (int64_t k = 0; k < chunk; k++) stereo[2 * k] = stereo[2 * k + 1] = audio[k];
+                [self audio:stereo count:chunk at:t into:self->systemA];
+            }
+            // A recorded window "closes" 2 s after the start: no more pictures from it.
+            if (self->cfg.window_id && since >= 2 && !self->st.window_closed) {
+                self->st.window_closed = 1;
+                self->st.window_closed_at = since - self->pausedTotal;
+            }
+            if (self->screenW && !frozen && !self->st.window_closed) {
                 CVPixelBufferRef pb = NULL;
                 CVPixelBufferPoolCreatePixelBuffer(NULL, self->synthPool, &pb);
                 if (pb) {
@@ -728,10 +831,80 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
         if (done) break;
     }
     free(audio);
+    free(stereo);
     dispatch_semaphore_signal(synthDone);
 }
 
 #pragma mark Sources
+
+- (BOOL)addAudioTo:(SCStreamConfiguration *)c API_AVAILABLE(macos(12.3)) {
+    if (!systemA) return NO;
+    if (@available(macOS 13.0, *)) {
+        c.capturesAudio = YES;
+        c.sampleRate = kRate;
+        c.channelCount = 2;
+        c.excludesCurrentProcessAudio = YES;
+        return YES;
+    }
+    return NO;
+}
+
+// Starts a ScreenCaptureKit stream with its picture (screen) and/or sound on the capture queue.
+- (SCStream *)startStream:(SCContentFilter *)filter config:(SCStreamConfiguration *)c screen:(BOOL)screen audio:(BOOL)audio message:(NSString **)message API_AVAILABLE(macos(12.3)) {
+    KRStreamOutput *out = [KRStreamOutput new];
+    out.rec = self;
+    out.screen = screen;
+    if (!scOutputs) scOutputs = [NSMutableArray array];
+    [scOutputs addObject:out];
+    SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:c delegate:out];
+    NSError *e = nil;
+    BOOL added = !screen || [stream addStreamOutput:out type:SCStreamOutputTypeScreen sampleHandlerQueue:q error:&e];
+    if (added && audio) {
+        if (@available(macOS 13.0, *)) added = [stream addStreamOutput:out type:SCStreamOutputTypeAudio sampleHandlerQueue:q error:&e];
+    }
+    if (!added) {
+        *message = [NSString stringWithFormat:@"The screen can't be recorded (%@). Restart the app and try again.", e.localizedDescription];
+        return nil;
+    }
+    dispatch_semaphore_t started = dispatch_semaphore_create(0);
+    __block NSError *startError = nil;
+    [stream startCaptureWithCompletionHandler:^(NSError *err) {
+        startError = err;
+        dispatch_semaphore_signal(started);
+    }];
+    dispatch_semaphore_wait(started, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+    if (startError) {
+        *message = [NSString stringWithFormat:@"The screen can't be recorded (%@). Check Screen Recording in the system's privacy settings, then restart the app.", startError.localizedDescription];
+        return nil;
+    }
+    return stream;
+}
+
+// The computer sound when no ScreenCaptureKit picture carries it (camera only, or the screen
+// through CGDisplayStream): a stream on the main display that delivers only sound.
+- (BOOL)startSystemAudio:(NSString **)message {
+    if (@available(macOS 13.0, *)) {
+        SCShareableContent *content = shareableContent(NO);
+        SCDisplay *main = nil;
+        for (SCDisplay *d in content.displays)
+            if (d.displayID == CGMainDisplayID()) main = d;
+        if (!main) {
+            *message = @"The computer sound can't be recorded. Allow KreoKit Rec under Screen Recording in System Settings > Privacy & Security, then restart the app.";
+            return NO;
+        }
+        SCStreamConfiguration *c = [SCStreamConfiguration new];
+        c.width = 2;
+        c.height = 2;
+        c.minimumFrameInterval = CMTimeMake(1, 1);
+        [self addAudioTo:c];
+        SCStream *stream = [self startStream:[[SCContentFilter alloc] initWithDisplay:main excludingWindows:@[]] config:c screen:NO audio:YES message:message];
+        if (!stream) return NO;
+        scAudioStream = stream;
+        return YES;
+    }
+    *message = @"Recording the computer sound needs macOS 13 or newer. Record without it.";
+    return NO;
+}
 
 - (BOOL)startScreen:(NSString **)message {
     int api = cfg.screen_api;
@@ -739,6 +912,7 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
         if (@available(macOS 13.0, *)) api = KR_SCREEN_SCREENCAPTUREKIT;
         else api = KR_SCREEN_CGDISPLAYSTREAM;
     }
+    if (cfg.window_id) api = KR_SCREEN_SCREENCAPTUREKIT; // CGDisplayStream can't record windows
     CGDirectDisplayID display = cfg.display_id ? cfg.display_id : CGMainDisplayID();
     if (api == KR_SCREEN_CGDISPLAYSTREAM) {
         NSMutableDictionary *props = @{
@@ -779,50 +953,41 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
         return YES;
     }
     if (@available(macOS 12.3, *)) {
-        dispatch_semaphore_t got = dispatch_semaphore_create(0);
-        __block SCShareableContent *content = nil;
-        [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *c, NSError *e) {
-            content = c;
-            dispatch_semaphore_signal(got);
-        }];
-        dispatch_semaphore_wait(got, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
-        SCDisplay *found = nil;
-        for (SCDisplay *d in content.displays)
-            if (d.displayID == display) found = d;
-        if (!found) {
-            *message = @"The screen can't be recorded. Allow KreoKit Rec under System Settings > Privacy & Security > Screen Recording, then restart the app.";
-            return NO;
+        SCShareableContent *content = shareableContent(NO);
+        SCContentFilter *filter = nil;
+        if (cfg.window_id) {
+            SCWindow *window = nil;
+            for (SCWindow *w in content.windows)
+                if (w.windowID == cfg.window_id) window = w;
+            if (!window) {
+                *message = content ? @"The window isn't there any more. Choose it again on the setup screen."
+                                   : @"The window can't be recorded. Allow KreoKit Rec under Screen Recording in the system's privacy settings, then restart the app.";
+                return NO;
+            }
+            filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:window];
+        } else {
+            SCDisplay *found = nil;
+            for (SCDisplay *d in content.displays)
+                if (d.displayID == display) found = d;
+            if (!found) {
+                *message = @"The screen can't be recorded. Allow KreoKit Rec under System Settings > Privacy & Security > Screen Recording, then restart the app.";
+                return NO;
+            }
+            filter = [[SCContentFilter alloc] initWithDisplay:found excludingWindows:@[]];
         }
-        SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:found excludingWindows:@[]];
         SCStreamConfiguration *c = [SCStreamConfiguration new];
         c.width = (size_t)cfg.width;
         c.height = (size_t)cfg.height;
-        if (cfg.region_width > 0) c.sourceRect = CGRectMake(cfg.region_x, cfg.region_y, cfg.region_width, cfg.region_height);
+        if (cfg.region_width > 0 && !cfg.window_id) c.sourceRect = CGRectMake(cfg.region_x, cfg.region_y, cfg.region_width, cfg.region_height);
         c.minimumFrameInterval = CMTimeMake(1, cfg.capture_fps);
         c.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
         c.colorMatrix = kCGDisplayStreamYCbCrMatrix_ITU_R_709_2;
         c.queueDepth = 8;
         c.showsCursor = YES;
-        KRStreamOutput *out = [KRStreamOutput new];
-        out.rec = self;
-        scOutput = out;
-        SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:c delegate:out];
-        NSError *e = nil;
-        if (![stream addStreamOutput:out type:SCStreamOutputTypeScreen sampleHandlerQueue:q error:&e]) {
-            *message = [NSString stringWithFormat:@"The screen can't be recorded (%@).", e.localizedDescription];
-            return NO;
-        }
-        dispatch_semaphore_t started = dispatch_semaphore_create(0);
-        __block NSError *startError = nil;
-        [stream startCaptureWithCompletionHandler:^(NSError *err) {
-            startError = err;
-            dispatch_semaphore_signal(started);
-        }];
-        dispatch_semaphore_wait(started, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
-        if (startError) {
-            *message = [NSString stringWithFormat:@"The screen can't be recorded (%@). Check Screen Recording in System Settings > Privacy & Security, then restart the app.", startError.localizedDescription];
-            return NO;
-        }
+        // The computer sound comes with the same stream (macOS 13+).
+        BOOL audio = [self addAudioTo:c];
+        SCStream *stream = [self startStream:filter config:c screen:YES audio:audio message:message];
+        if (!stream) return NO;
         scStream = stream;
         return YES;
     }
@@ -923,12 +1088,14 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
     }
 #pragma clang diagnostic pop
     if (@available(macOS 12.3, *)) {
-        if (scStream) {
+        for (SCStream *stream in @[ scStream ?: NSNull.null, scAudioStream ?: NSNull.null ]) {
+            if ((id)stream == NSNull.null) continue;
             dispatch_semaphore_t stopped = dispatch_semaphore_create(0);
-            [(SCStream *)scStream stopCaptureWithCompletionHandler:^(NSError *e) { dispatch_semaphore_signal(stopped); }];
+            [stream stopCaptureWithCompletionHandler:^(NSError *e) { dispatch_semaphore_signal(stopped); }];
             dispatch_semaphore_wait(stopped, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC));
-            scStream = nil;
         }
+        scStream = nil;
+        scAudioStream = nil;
     }
     [micSession stopRunning];
     micSession = nil;
@@ -943,7 +1110,6 @@ static void drawPattern(CVPixelBufferRef pb, int64_t n, BOOL marker) { drawPatte
 }
 
 - (void)dealloc {
-    if (pcmFormat) CFRelease(pcmFormat);
     if (synthPool) CVPixelBufferPoolRelease(synthPool);
     if (synthCameraPool) CVPixelBufferPoolRelease(synthCameraPool);
     if (cropper) {
@@ -972,8 +1138,6 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
         rec->pauses = [NSMutableArray array];
         rec->pauseStart = -1;
         rec->stopAt = INFINITY;
-        AudioStreamBasicDescription asbd = {kRate, kAudioFormatLinearPCM, kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked, 4, 1, 4, 1, 32, 0};
-        CMAudioFormatDescriptionCreate(NULL, &asbd, 0, NULL, 0, NULL, NULL, &rec->pcmFormat);
 
         BOOL realtime = !config->synthetic_fast;
         NSString *message = nil;
@@ -998,11 +1162,27 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
             rec->cameraP = [KRPacer pacerWith:rec->cameraW camera:YES];
         }
         if (config->mic) {
-            rec->micW = [KRWriter writerAt:[rec->dir stringByAppendingPathComponent:@"mic.mp4"] video:NO settings:aacSettings() fps:config->fps realtime:realtime error:&message];
+            rec->micW = [KRWriter writerAt:[rec->dir stringByAppendingPathComponent:@"mic.mp4"] video:NO settings:aacSettings(1) fps:config->fps realtime:realtime error:&message];
             if (!rec->micW) {
                 setError(error, error_len, [NSString stringWithFormat:@"The microphone recording file can't be created (%@). Check that the disk has space.", message]);
                 return NULL;
             }
+            rec->micA = [KRAudioTrack trackWith:rec->micW channels:1];
+        }
+        if (config->system_audio) {
+            if (!config->synthetic) {
+                if (@available(macOS 13.0, *)) {
+                } else {
+                    setError(error, error_len, @"Recording the computer sound needs macOS 13 or newer. Record without it.");
+                    return NULL;
+                }
+            }
+            rec->systemW = [KRWriter writerAt:[rec->dir stringByAppendingPathComponent:@"system.mp4"] video:NO settings:aacSettings(2) fps:config->fps realtime:realtime error:&message];
+            if (!rec->systemW) {
+                setError(error, error_len, [NSString stringWithFormat:@"The computer sound recording file can't be created (%@). Check that the disk has space.", message]);
+                return NULL;
+            }
+            rec->systemA = [KRAudioTrack trackWith:rec->systemW channels:2];
         }
 
         double now = hostSeconds();
@@ -1056,6 +1236,11 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
                 setError(error, error_len, message);
                 return NULL;
             }
+            if (config->system_audio && !rec->scStream && ![rec startSystemAudio:&message]) {
+                [rec stopSources];
+                setError(error, error_len, message);
+                return NULL;
+            }
         }
         if (!config->synthetic_fast && (config->screen || config->camera)) {
             // The pacer writes each slot once its frame had time to arrive.
@@ -1072,11 +1257,12 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
         // What the OS still holds in memory reaches the disk every 2 s (power loss).
         rec->syncTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
         dispatch_source_set_timer(rec->syncTimer, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 2 * NSEC_PER_SEC, NSEC_PER_SEC / 4);
-        KRWriter *sw = rec->screenW, *cw = rec->cameraW, *mw = rec->micW;
+        KRWriter *sw = rec->screenW, *cw = rec->cameraW, *mw = rec->micW, *yw = rec->systemW;
         dispatch_source_set_event_handler(rec->syncTimer, ^{
             [sw sync];
             [cw sync];
             [mw sync];
+            [yw sync];
         });
         dispatch_resume(rec->syncTimer);
         return (void *)CFBridgingRetain(rec);
@@ -1120,8 +1306,14 @@ static void fillStatus(KRRecorder *rec, KrRecStatus *status) {
     status->camera_frames_late = c ? c->late : 0;
     status->camera_frames_lost = c ? c->lost : 0;
     status->camera_frames_dropped = rec->cameraW ? atomic_load(&rec->cameraW->dropped) : 0;
-    status->audio_dropped = rec->st.audio_dropped + (rec->micW ? atomic_load(&rec->micW->dropped) : 0);
-    if (rec->screenW.failure || rec->cameraW.failure || rec->micW.failure) status->failed = 1;
+    KRAudioTrack *m = rec->micA, *y = rec->systemA;
+    status->audio_samples = m ? m->samples : 0;
+    status->audio_filled = m ? m->filled : 0;
+    status->audio_dropped = m ? m->dropped + atomic_load(&m->w->dropped) : 0;
+    status->system_samples = y ? y->samples : 0;
+    status->system_filled = y ? y->filled : 0;
+    status->system_dropped = y ? y->dropped + atomic_load(&y->w->dropped) : 0;
+    if (rec->screenW.failure || rec->cameraW.failure || rec->micW.failure || rec->systemW.failure) status->failed = 1;
 }
 
 void kr_rec_status(void *p, KrRecStatus *status) {
@@ -1139,16 +1331,27 @@ int kr_rec_stop(void *p, KrRecStatus *status, char *error, size_t error_len) {
         // Late frames and microphone buffers still arrive for a moment.
         if (!rec->cfg.synthetic_fast) usleep(250000);
         [rec stopSources];
-        dispatch_sync(rec->q, ^{ [rec emitUpTo:INFINITY]; });
+        dispatch_sync(rec->q, ^{
+            [rec emitUpTo:INFINITY];
+            // Every sound track reaches the picture's end (the computer sound sends nothing
+            // while nothing plays, or stops with a closed window).
+            KRPacer *picture = rec->screenP ?: rec->cameraP;
+            if (picture) {
+                int64_t end = llround((double)picture->written * kRate / rec->cfg.fps);
+                [rec pad:rec->micA to:end];
+                [rec pad:rec->systemA to:end];
+            }
+        });
         dispatch_group_t done = dispatch_group_create();
         [rec->screenW finish:done];
         [rec->cameraW finish:done];
         [rec->micW finish:done];
+        [rec->systemW finish:done];
         dispatch_group_wait(done, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
         __block int result = 0;
         dispatch_sync(rec->q, ^{
             fillStatus(rec, status);
-            NSString *failure = rec->error ?: rec->screenW.failure ?: rec->cameraW.failure ?: rec->micW.failure;
+            NSString *failure = rec->error ?: rec->screenW.failure ?: rec->cameraW.failure ?: rec->micW.failure ?: rec->systemW.failure;
             if (failure) {
                 setError(error, error_len, failure);
                 result = -1;
@@ -1262,6 +1465,49 @@ char *kr_cameras_json(void) {
                 @"id" : d.uniqueID, @"name" : d.localizedName, @"default" : [d.uniqueID isEqual:def.uniqueID] ? @YES : @NO,
                 @"width" : @(dim.width), @"height" : @(dim.height)
             }];
+        }
+        return jsonCopy(list);
+    }
+}
+
+int kr_system_audio_supported(void) {
+    if (@available(macOS 13.0, *)) return 1;
+    return 0;
+}
+
+int kr_window_capture_supported(void) {
+    if (@available(macOS 12.3, *)) return 1;
+    return 0;
+}
+
+// Pixels per point of the display under a point (global coordinates, y down).
+static double scaleAt(CGPoint p) {
+    CGDirectDisplayID d = 0;
+    uint32_t n = 0;
+    if (CGGetDisplaysWithPoint(p, 1, &d, &n) != kCGErrorSuccess || n == 0) d = CGMainDisplayID();
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(d);
+    double points = CGDisplayBounds(d).size.width;
+    double scale = mode && points > 0 ? CGDisplayModeGetPixelWidth(mode) / points : 1;
+    if (mode) CGDisplayModeRelease(mode);
+    return scale;
+}
+
+char *kr_windows_json(void) {
+    @autoreleasepool {
+        NSMutableArray *list = [NSMutableArray array];
+        if (@available(macOS 12.3, *)) {
+            if (!CGPreflightScreenCaptureAccess()) return jsonCopy(list);
+            pid_t me = getpid();
+            for (SCWindow *w in shareableContent(YES).windows) {
+                CGRect f = w.frame;
+                if (w.windowLayer != 0 || f.size.width < 64 || f.size.height < 64 || w.owningApplication.processID == me) continue;
+                NSString *app = w.owningApplication.applicationName ?: @"", *title = w.title ?: @"";
+                if (!app.length && !title.length) continue;
+                [list addObject:@{
+                    @"id" : @(w.windowID), @"app" : app, @"title" : title, @"width" : @(f.size.width), @"height" : @(f.size.height),
+                    @"scale" : @(scaleAt(CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f))))
+                }];
+            }
         }
         return jsonCopy(list);
     }

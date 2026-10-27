@@ -208,6 +208,31 @@ struct Devices {
     displays: Vec<Display>,
     mics: Vec<Mic>,
     cameras: Vec<Camera>,
+    /// The computer sound can be recorded (macOS 13+).
+    system_audio: bool,
+    /// Windows can be recorded; otherwise why not, for the setup screen.
+    windows: bool,
+    windows_note: Option<String>,
+}
+
+/// Window capture on macOS 12 (ScreenCaptureKit, 12.3+): whether it's reliable enough to
+/// offer, decided by the measurement in docs/m3-results.md.
+const WINDOWS_ON_MACOS_12: bool = true;
+
+fn window_support() -> (bool, Option<String>) {
+    if !native::window_capture_supported() {
+        return (
+            false,
+            Some("Recording a window needs macOS 12.3 or newer. Record a region instead.".into()),
+        );
+    }
+    if !native::system_audio_supported() && !WINDOWS_ON_MACOS_12 {
+        return (
+            false,
+            Some("Recording a window isn't reliable on macOS 12 (it misses pictures). Record a region around the window instead, or update to macOS 13 or newer.".into()),
+        );
+    }
+    (true, None)
 }
 
 #[tauri::command]
@@ -239,16 +264,39 @@ async fn devices() -> Result<Devices, String> {
                 width: 1280,
                 height: 720,
             }],
+            system_audio: true,
+            windows: true,
+            windows_note: None,
         });
     }
     blocking(|| {
+        let (windows, windows_note) = window_support();
         Ok(Devices {
             displays: native::displays(),
             mics: native::mics(),
             cameras: native::cameras(),
+            system_audio: native::system_audio_supported(),
+            windows,
+            windows_note,
         })
     })
     .await
+}
+
+/// The windows that can be recorded now (asked each time the window choice opens).
+#[tauri::command]
+async fn windows() -> Result<Vec<native::Window>, String> {
+    if synthetic().is_some() {
+        return Ok(vec![native::Window {
+            id: 7,
+            app: "Test app".into(),
+            title: "Test window".into(),
+            width: 640.0,
+            height: 400.0,
+            scale: 2.0,
+        }]);
+    }
+    blocking(|| Ok(native::windows())).await
 }
 
 #[derive(Serialize)]
@@ -273,8 +321,13 @@ fn estimate(
     camera_width: u32,
     camera_height: u32,
     mic: bool,
+    window: Option<sessions::WindowChoice>,
+    system_audio: Option<bool>,
 ) -> Estimate {
-    let (source_w, source_h) = sessions::source_size(width, height, points_width, region);
+    let (source_w, source_h) = match &window {
+        Some(w) => sessions::window_size(w),
+        None => sessions::source_size(width, height, points_width, region),
+    };
     let (w, h) = sessions::output_size(source_w, source_h, quality);
     let camera = (camera_width > 0).then(|| sessions::camera_size(camera_width, camera_height));
     let root = recordings(&app).root().to_path_buf();
@@ -282,7 +335,7 @@ fn estimate(
     Estimate {
         width: w,
         height: h,
-        bytes_per_minute: sessions::bytes_per_minute(w, h, camera, mic),
+        bytes_per_minute: sessions::bytes_per_minute(w, h, camera, mic, system_audio.unwrap_or(false)),
         free_bytes: disk::free_bytes(&root),
     }
 }
@@ -533,6 +586,7 @@ pub fn run() {
             open_privacy_settings,
             restart_app,
             devices,
+            windows,
             estimate,
             monitor_start,
             monitor_level,

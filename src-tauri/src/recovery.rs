@@ -87,11 +87,13 @@ pub fn recover(recordings: &Recordings, id: &str) -> Result<Session, String> {
     }
     let fps = session.screen.as_ref().map_or(30, |s| s.fps);
     let mut result = check::check(&dir, None, fps);
-    // Every track ends where the shortest one does.
+    // Every track ends where the shortest one does; except the computer sound, which may end
+    // early (it sends nothing while nothing plays) and is only cut.
     let ends =
         check::TRACKS.map(|(name, _, _)| (name, result.get(name).map(check::TrackCheck::end_s)));
     let end = ends
         .iter()
+        .filter(|(name, _)| *name != "system.mp4")
         .filter_map(|(_, e)| *e)
         .fold(f64::INFINITY, f64::min);
     let mut cut = false;
@@ -135,12 +137,14 @@ mod tests {
             screen: Some(ScreenInfo {
                 display: "Built-in display".into(),
                 region: None,
+                window: None,
                 width: 320,
                 height: 180,
                 fps: 30,
             }),
             mic: Some("Microphone".into()),
             camera: None,
+            system_audio: false,
             elapsed_s: elapsed,
             pauses: 0,
             check: None,
@@ -205,16 +209,33 @@ mod tests {
         make_tracks(&dir, 6.0, true, true);
         // The camera's writer was a fragment behind when the app was killed.
         make_camera(&dir, 4.0, true);
+        // The computer sound sent nothing for its last 3 s (nothing played): it doesn't
+        // decide where the others end.
+        make_system(&dir, 1.0);
         let recordings = fake(&root);
         let session = recover(&recordings, "2026-10-27-143400").unwrap();
         assert_eq!(session.state, State::Recovered, "{session:?}");
         let check = session.check.as_ref().unwrap();
         assert!(check.problems.is_empty(), "{check:?}");
-        for t in check.tracks() {
+        for t in [&check.screen, &check.camera, &check.mic] {
+            let t = t.as_ref().unwrap();
             assert!((t.end_s() - 4.0).abs() <= 1.0 / 30.0 + 0.03, "{check:?}");
         }
-        assert!(check.camera.is_some() && check.mic.is_some(), "{check:?}");
+        assert!(check.system.as_ref().unwrap().end_s() < 1.1, "{check:?}");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A computer sound track (stereo AAC) `seconds` long, fragmented.
+    fn make_system(dir: &Path, seconds: f64) {
+        let status = std::process::Command::new(ffmpeg::locate("ffmpeg").unwrap())
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!("sine=sample_rate=48000:duration={seconds}"))
+            .args(["-c:a", "aac", "-ac", "2", "-frag_duration", "1000000"])
+            .args(["-movflags", "frag_keyframe+empty_moov+default_base_moof"])
+            .arg(dir.join("system.mp4"))
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     /// Needs ffmpeg: `cargo test -- --ignored`.

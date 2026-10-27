@@ -340,6 +340,7 @@ mod tests {
             dir: dir.clone(),
             screen: Some(ScreenConfig {
                 region: None,
+                window: None,
                 display_id: 0,
                 width: 640,
                 height: 360,
@@ -355,6 +356,7 @@ mod tests {
                 height: 180,
                 bitrate: 1_000_000,
             }),
+            system_audio: false,
             synthetic: Some(Synthetic {
                 fast: true,
                 still_periods: true,
