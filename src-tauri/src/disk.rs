@@ -1,20 +1,6 @@
-//! Free disk space (from KreoKit Clips' `batch.rs`), checked before large writes.
+//! Free disk space (from KreoKit Voice), checked before and during recording.
 
 use std::path::Path;
-
-/// Fails with a readable message when writing `needed` bytes into `dir` would leave less
-/// than `margin` free. When the free space can't be read, the write is attempted anyway.
-pub fn ensure_free(dir: &Path, needed: u64, margin: u64) -> Result<(), String> {
-    match free_bytes(dir) {
-        Some(free) if free < needed.saturating_add(margin) => Err(format!(
-            "Not enough free disk space: this needs about {} and {} is free (keeping {} spare). Free up some space, then try again.",
-            gigabytes(needed),
-            gigabytes(free),
-            gigabytes(margin)
-        )),
-        _ => Ok(()),
-    }
-}
 
 /// "0.7 GB", "12 GB".
 pub fn gigabytes(bytes: u64) -> String {
@@ -68,12 +54,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_free_space_and_refuses_impossible_writes() {
-        let dir = std::env::temp_dir();
-        assert!(free_bytes(&dir).is_some_and(|b| b > 0));
-        assert!(ensure_free(&dir, 1, 0).is_ok());
-        let err = ensure_free(&dir, u64::MAX / 2, 1 << 30).unwrap_err();
-        assert!(err.starts_with("Not enough free disk space"), "{err}");
+    fn reads_free_space() {
+        assert!(free_bytes(&std::env::temp_dir()).is_some_and(|b| b > 0));
     }
 
     #[test]
