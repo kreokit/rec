@@ -27,6 +27,9 @@ pub const START_BELOW_FREE: u64 = 2_000_000_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
+    /// The countdown runs: devices open, nothing recorded yet (`begin` starts it, `cancel`
+    /// throws it away).
+    Countdown,
     Recording,
     Paused,
     /// Stopped; the files are being finished and checked.
@@ -131,6 +134,9 @@ pub struct Options {
     /// The computer's sound (macOS 13+).
     #[serde(default)]
     pub system_audio: bool,
+    /// Start after a countdown: held until `begin` (RecordConfig::hold).
+    #[serde(default)]
+    pub countdown: bool,
     /// The app's own windows to keep out of the picture (set by the app, not the setup
     /// screen).
     #[serde(skip)]
@@ -443,7 +449,11 @@ impl Recordings {
         let mut session = Session {
             id,
             created_at,
-            state: State::Recording,
+            state: if options.countdown {
+                State::Countdown
+            } else {
+                State::Recording
+            },
             screen: Some(ScreenInfo {
                 display: options.display_name.clone(),
                 region,
@@ -476,6 +486,7 @@ impl Recordings {
         };
         write_session(&dir, &session)?;
         let config = RecordConfig {
+            hold: options.countdown,
             dir: dir.clone(),
             screen: Some(ScreenConfig {
                 display_id: options.display_id,
@@ -537,6 +548,7 @@ impl Recordings {
                 a.session.elapsed_s = status.elapsed;
                 let _ = write_session(&a.dir, &a.session);
                 if a.session.error.is_none()
+                    && a.session.state != State::Countdown
                     && disk::free_bytes(&a.dir).is_some_and(|free| free < STOP_BELOW_FREE)
                 {
                     a.session.error = Some(
@@ -576,6 +588,43 @@ impl Recordings {
                 a.session.state = State::Recording;
             }
         })
+    }
+
+    /// The countdown is over: the recording starts now.
+    pub fn begin(&self) -> Result<Session, String> {
+        self.change(|a| {
+            if a.session.state == State::Countdown {
+                a.capture.resume();
+                a.session.state = State::Recording;
+            }
+        })
+    }
+
+    /// The countdown was cancelled: nothing was recorded, so nothing is kept.
+    pub fn cancel(&self) -> Result<(), String> {
+        let mut guard = self.active.lock().unwrap();
+        if guard.as_ref().map(|a| a.session.state) != Some(State::Countdown) {
+            return Err("The recording has already started. Stop it instead.".into());
+        }
+        let Active { dir, capture, .. } = guard.take().unwrap();
+        drop(guard);
+        let _ = capture.stop();
+        self.stop_heartbeat();
+        let _ = fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// Folders left by a countdown the app didn't finish (it quit or crashed): nothing was
+    /// recorded in them.
+    pub fn remove_stale_countdowns(&self) {
+        if self.is_recording() {
+            return;
+        }
+        for session in self.all() {
+            if session.state == State::Countdown {
+                let _ = fs::remove_dir_all(self.root.join(&session.id));
+            }
+        }
     }
 
     fn change(&self, f: impl FnOnce(&mut Active)) -> Result<Session, String> {
@@ -655,7 +704,12 @@ impl Recordings {
             .map(|a| a.session.id.clone());
         self.all()
             .into_iter()
-            .filter(|s| !s.hidden && !s.state.unfinished() && Some(&s.id) != active.as_ref())
+            .filter(|s| {
+                !s.hidden
+                    && !s.state.unfinished()
+                    && s.state != State::Countdown
+                    && Some(&s.id) != active.as_ref()
+            })
             .collect()
     }
 
@@ -837,6 +891,7 @@ pub mod tests {
             region: None,
             window: None,
             system_audio: false,
+            countdown: false,
             own_windows: Vec::new(),
         }
     }
@@ -934,6 +989,40 @@ pub mod tests {
         let kept = Arc::new(Mutex::new(None));
         let recordings = Recordings::new(root.to_path_buf(), Box::new(Keeps(kept.clone())));
         (recordings, kept)
+    }
+
+    /// Needs ffmpeg: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn a_countdown_holds_the_recording_until_it_begins() {
+        let root = temp_root("countdown");
+        let recordings = fake(&root);
+        let mut opts = options();
+        opts.countdown = true;
+        let session = recordings.start(&opts).unwrap();
+        assert_eq!(session.state, State::Countdown);
+        // Not offered for recovery and not in Recent while the countdown runs.
+        assert!(recordings.recent().is_empty());
+        assert!(recordings.pause().unwrap().state == State::Countdown);
+        assert_eq!(recordings.begin().unwrap().state, State::Recording);
+        assert!(recordings.cancel().is_err(), "too late to cancel");
+        assert_eq!(recordings.stop().unwrap().pauses, 0);
+
+        // Cancelled: nothing kept.
+        let session = recordings.start(&opts).unwrap();
+        recordings.cancel().unwrap();
+        assert!(!root.join(&session.id).exists());
+        assert!(recordings.live().is_none());
+
+        // Left behind by a crash during the countdown: removed at the next start.
+        let stale = root.join("2026-01-01-000000");
+        fs::create_dir_all(&stale).unwrap();
+        let mut left = session.clone();
+        left.id = "2026-01-01-000000".into();
+        write_session(&stale, &left).unwrap();
+        assert!(crate::recovery::pending(&recordings).is_empty());
+        assert!(!stale.exists());
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

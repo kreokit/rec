@@ -66,6 +66,10 @@ pub struct Synthetic {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RecordConfig {
+    /// Start paused at the recording's first moment (devices open, nothing recorded yet):
+    /// `resume` begins it. For the countdown, so the camera and mic are ready at 0:00.
+    #[serde(default)]
+    pub hold: bool,
     pub dir: PathBuf,
     pub screen: Option<ScreenConfig>,
     /// The microphone's id (`None`: no microphone; `Some("")`: the default one).
@@ -212,6 +216,7 @@ mod macos {
         camera_height: c_int,
         camera_bitrate: c_int,
         system_audio: c_int,
+        hold: c_int,
         synthetic: c_int,
         synthetic_fast: c_int,
         synthetic_static: c_int,
@@ -373,6 +378,7 @@ mod macos {
                 camera_height: camera.map_or(0, |c| c.height as c_int),
                 camera_bitrate: camera.map_or(0, |c| c.bitrate as c_int),
                 system_audio: config.system_audio as c_int,
+                hold: config.hold as c_int,
                 synthetic: config.synthetic.is_some() as c_int,
                 synthetic_fast: synthetic.fast as c_int,
                 synthetic_static: synthetic.still_periods as c_int,
@@ -736,6 +742,7 @@ pub(crate) mod tests {
 
     pub fn synthetic(dir: PathBuf, width: u32, height: u32, still: bool) -> RecordConfig {
         RecordConfig {
+            hold: false,
             dir,
             screen: Some(ScreenConfig {
                 display_id: 0,
@@ -884,6 +891,35 @@ pub(crate) mod tests {
             (least..=17).contains(&pictures),
             "{pictures} pictures in 1 s"
         );
+    }
+
+    #[test]
+    fn a_held_start_records_nothing_until_resumed() {
+        let _timing = alongside();
+        let dir = temp_dir("held");
+        let mut config = synthetic(dir.clone(), 640, 360, false);
+        config.hold = true;
+        let rec = Recorder::start(&config).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let held = rec.status();
+        assert_eq!(
+            (held.elapsed, held.frames, held.audio_samples),
+            (0.0, 0, 0),
+            "{held:?}"
+        );
+        assert!(held.paused);
+        rec.resume();
+        wait_for(&rec, 3.0);
+        let (status, error) = rec.stop();
+        assert_eq!(error, None);
+        assert!(!status.paused);
+        // Recorded from the resume on, as from a normal start: every slot fresh.
+        assert_eq!(status.frames_new, status.frames, "{status:?}");
+        assert!(
+            (status.frames as f64 / 30.0 - status.elapsed).abs() < 0.1,
+            "{status:?}"
+        );
+        check(&dir, false);
     }
 
     #[test]

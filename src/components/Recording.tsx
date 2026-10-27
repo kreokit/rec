@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play, Square, TriangleAlert } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
+import { Pause, Play, Square, TriangleAlert, X } from "lucide-react";
 import { Live, Session, api } from "../lib/api";
 import { formatBytes, formatDuration } from "../lib/format";
 import { Button, ICON_STROKE, toast } from "../ui";
@@ -11,10 +12,19 @@ import "../styles/recording.css";
 const LOW_SPACE = 2e9;
 
 /**
- * While recording: the time, pause/resume, stop and the microphone level. (The countdown,
- * floating control and stop shortcut come in milestone 5.)
+ * While recording: the time, pause/resume, stop and the microphone level. During the
+ * countdown (its own window, Countdown.tsx): "Starting…" and Cancel.
  */
-export function Recording({ session, onDone }: { session: Session; onDone: (session: Session) => void }) {
+export function Recording({
+  session,
+  onDone,
+  onCancelled,
+}: {
+  session: Session;
+  onDone: (session: Session) => void;
+  /** The countdown was cancelled: nothing was recorded. */
+  onCancelled: () => void;
+}) {
   const [live, setLive] = useState<Live | null>(null);
   const [stopping, setStopping] = useState(false);
   const stoppingRef = useRef(false);
@@ -29,7 +39,13 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const stop = listen("recording-cancelled", () => onCancelled());
+    return () => void stop.then((f) => f());
+  }, [onCancelled]);
+
   const current = live?.session ?? session;
+  const counting = current.state === "countdown";
   const paused = current.state === "paused";
   const stuck = !!current.error; // paused for good (disk almost full)
 
@@ -63,7 +79,7 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
       <main className="recording">
         <div className={paused ? "rec-state paused" : "rec-state"}>
           <span className="rec-dot" aria-hidden />
-          {stopping ? "Finishing the recording…" : paused ? "Paused" : "Recording"}
+          {stopping ? "Finishing the recording…" : counting ? "Starting…" : paused ? "Paused" : "Recording"}
         </div>
         <div className="rec-time" aria-live="off">
           {formatDuration(live?.status.elapsed ?? 0)}
@@ -82,17 +98,25 @@ export function Recording({ session, onDone }: { session: Session; onDone: (sess
         )}
 
         <div className="rec-controls">
-          <Button
-            variant="secondary"
-            icon={paused ? Play : Pause}
-            disabled={stopping || stuck}
-            onClick={() => void toggle()}
-          >
-            {paused ? "Resume" : "Pause"}
-          </Button>
-          <Button variant="primary" icon={Square} disabled={stopping} onClick={() => void stop()}>
-            Stop
-          </Button>
+          {counting ? (
+            <Button variant="secondary" icon={X} onClick={() => void api.countdownCancel()}>
+              Cancel
+            </Button>
+          ) : (
+            <>
+              <Button
+                variant="secondary"
+                icon={paused ? Play : Pause}
+                disabled={stopping || stuck}
+                onClick={() => void toggle()}
+              >
+                {paused ? "Resume" : "Pause"}
+              </Button>
+              <Button variant="primary" icon={Square} disabled={stopping} onClick={() => void stop()}>
+                Stop
+              </Button>
+            </>
+          )}
         </div>
 
         {(failed || stuck || lowSpace) && (

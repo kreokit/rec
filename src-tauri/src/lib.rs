@@ -640,19 +640,126 @@ fn own_windows(app: &AppHandle, on: bool) -> Vec<u32> {
     Vec::new()
 }
 
+/// Waits without holding up the async runtime.
+async fn wait_ms(d: std::time::Duration) {
+    let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(d)).await;
+}
+
+/// The countdown's size in points (a square in the middle of what is recorded).
+const COUNTDOWN_SIZE: f64 = 220.0;
+
+/// Opens the countdown over the middle of the recorded display (or region). It counts on
+/// its own and then calls `countdown_done` (or `countdown_cancel` on Esc).
+fn countdown_open(
+    app: &AppHandle,
+    display: &Display,
+    region: Option<Region>,
+) -> Result<(), String> {
+    if let Some(open) = app.get_webview_window("countdown") {
+        let _ = open.destroy();
+    }
+    let (cx, cy) = match region {
+        Some(r) => (r.x + r.width / 2.0, r.y + r.height / 2.0),
+        None => (display.points_width / 2.0, display.points_height / 2.0),
+    };
+    let window = WebviewWindowBuilder::new(app, "countdown", WebviewUrl::App("index.html".into()))
+        .title("Countdown")
+        .initialization_script("window.__KREOKIT_COUNTDOWN__ = true;")
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .resizable(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .visible(false)
+        .position(
+            display.x + cx - COUNTDOWN_SIZE / 2.0,
+            display.y + cy - COUNTDOWN_SIZE / 2.0,
+        )
+        .inner_size(COUNTDOWN_SIZE, COUNTDOWN_SIZE)
+        .build()
+        .map_err(|e| {
+            format!("The countdown can't open ({e}). Turn the countdown off, then record again.")
+        })?;
+    #[cfg(target_os = "macos")]
+    {
+        let ns_window = window.ns_window().map_err(|e| e.to_string())? as usize;
+        window
+            .run_on_main_thread(move || native::overlay_window(ns_window as *mut _))
+            .map_err(|e| e.to_string())?;
+    }
+    window.show().map_err(|e| e.to_string())?;
+    window.set_focus().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn countdown_close(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("countdown") {
+        let _ = window.destroy();
+    }
+}
+
+/// Starts a recording. With a countdown, the countdown window opens first (so it is one of
+/// the app's windows kept out of the picture) and the recording is held until it ends.
 #[tauri::command]
-async fn start_recording(app: AppHandle, mut options: Options) -> Result<Session, String> {
-    blocking(move || {
-        native::monitor_stop();
-        native::preview_stop();
-        options.own_windows = own_windows(&app, true);
-        let started = recordings(&app).start(&options);
-        if started.is_err() {
-            own_windows(&app, false);
+async fn start_recording(
+    app: AppHandle,
+    mut options: Options,
+    display: Option<Display>,
+) -> Result<Session, String> {
+    if options.countdown {
+        let display = display.ok_or("Choose a display, then record again.")?;
+        countdown_open(&app, &display, options.region)?;
+        // On screen before the recorder looks at which of the app's windows are shown.
+        wait_ms(std::time::Duration::from_millis(150)).await;
+    }
+    let started = blocking({
+        let app = app.clone();
+        move || {
+            native::monitor_stop();
+            native::preview_stop();
+            options.own_windows = own_windows(&app, true);
+            recordings(&app).start(&options)
         }
-        started
     })
-    .await
+    .await;
+    if started.is_err() {
+        countdown_close(&app);
+        own_windows(&app, false);
+    }
+    started
+}
+
+/// The countdown is over: its window goes, then the recording begins (a moment later, so
+/// the countdown isn't in the first picture where it can't be kept out).
+#[tauri::command]
+async fn countdown_done(app: AppHandle) -> Result<Session, String> {
+    countdown_close(&app);
+    wait_ms(std::time::Duration::from_millis(100)).await;
+    let began = blocking({
+        let app = app.clone();
+        move || recordings(&app).begin()
+    })
+    .await;
+    let _ = app.emit_to("main", "recording-began", &began.as_ref().ok());
+    began
+}
+
+/// Esc during the countdown: nothing is recorded or kept.
+#[tauri::command]
+async fn countdown_cancel(app: AppHandle) -> Result<(), String> {
+    countdown_close(&app);
+    let cancelled = blocking({
+        let app = app.clone();
+        move || {
+            let result = recordings(&app).cancel();
+            own_windows(&app, false);
+            result
+        }
+    })
+    .await;
+    let _ = app.emit_to("main", "recording-cancelled", ());
+    cancelled
 }
 
 #[tauri::command]
@@ -825,6 +932,9 @@ struct Prefs {
     /// Where exports go; the Movies (Videos) folder when not set or gone.
     #[serde(default)]
     export_folder: Option<PathBuf>,
+    /// Count 3-2-1 before recording (on when not set).
+    #[serde(default)]
+    countdown: Option<bool>,
 }
 
 fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -841,6 +951,33 @@ fn read_prefs(app: &AppHandle) -> Prefs {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|json| serde_json::from_str(&json).ok())
         .unwrap_or_default()
+}
+
+/// Changes the remembered choices; `failed` says what it means when they can't be saved.
+fn write_prefs(
+    app: &AppHandle,
+    change: impl FnOnce(&mut Prefs),
+    failed: &str,
+) -> Result<(), String> {
+    let mut prefs = read_prefs(app);
+    change(&mut prefs);
+    let path = prefs_path(app)?;
+    let json = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| format!("{failed} ({e})."))
+}
+
+#[tauri::command]
+fn countdown_pref(app: AppHandle) -> bool {
+    read_prefs(&app).countdown.unwrap_or(true)
+}
+
+#[tauri::command]
+fn set_countdown_pref(app: AppHandle, on: bool) -> Result<(), String> {
+    write_prefs(
+        &app,
+        |p| p.countdown = Some(on),
+        "The countdown choice couldn't be remembered; it's used until the app closes",
+    )
 }
 
 /// The folder exports go to.
@@ -910,14 +1047,11 @@ async fn set_export_folder(app: AppHandle, folder: PathBuf) -> Result<(), String
         if !folder.is_dir() {
             return Err("That folder can't be used. Choose another one.".into());
         }
-        let prefs = Prefs {
-            export_folder: Some(folder),
-        };
-        let path = prefs_path(&app)?;
-        let json = serde_json::to_string_pretty(&prefs).map_err(|e| e.to_string())?;
-        std::fs::write(path, json).map_err(|e| {
-            format!("The folder couldn't be remembered ({e}). It's used for this export only.")
-        })
+        write_prefs(
+            &app,
+            |p| p.export_folder = Some(folder),
+            "The folder couldn't be remembered; it's used for this export only",
+        )
     })
     .await
 }
@@ -1099,6 +1233,10 @@ pub fn run() {
             region_open,
             region_done,
             start_recording,
+            countdown_done,
+            countdown_cancel,
+            countdown_pref,
+            set_countdown_pref,
             pause_recording,
             resume_recording,
             live_status,

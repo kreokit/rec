@@ -1,0 +1,36 @@
+/* The countdown: a see-through window over the middle of what is recorded (Countdown.tsx). */
+
+html.countdown-window,
+html.countdown-window body,
+html.countdown-window #root {
+  background: transparent;
+  overflow: hidden;
+}
+
+.countdown {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  border-radius: 50%;
+  background: rgb(14 14 16 / 0.85);
+  color: var(--color-text);
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.countdown-number {
+  font-size: 96px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.countdown-hint {
+  font-size: 13px;
+  color: var(--color-text-2);
+}

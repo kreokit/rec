@@ -246,6 +246,7 @@ fn run(dir: &std::path::Path, test: &str, place: Option<&Place>) -> Result<Value
             let (w, h) = sessions::output_size(display.width, display.height, 1080);
             let s = w as f64 / display.width as f64 * p.scale;
             let config = RecordConfig {
+                hold: false,
                 dir: dir.to_path_buf(),
                 screen: Some(screen(&display, None, None, w, h)),
                 mic: None,
@@ -268,6 +269,7 @@ fn run(dir: &std::path::Path, test: &str, place: Option<&Place>) -> Result<Value
             };
             let (w, h) = (even(region.width * p.scale), even(region.height * p.scale));
             let config = RecordConfig {
+                hold: false,
                 dir: dir.to_path_buf(),
                 screen: Some(screen(&display, Some(region), None, w, h)),
                 mic: None,
@@ -284,6 +286,7 @@ fn run(dir: &std::path::Path, test: &str, place: Option<&Place>) -> Result<Value
             let p = need_place()?;
             let (w, h) = (even(p.width * p.scale), even(p.height * p.scale));
             let config = RecordConfig {
+                hold: false,
                 dir: dir.to_path_buf(),
                 screen: Some(screen(&display, None, Some(p.window_id), w, h)),
                 mic: None,
@@ -311,6 +314,7 @@ fn run(dir: &std::path::Path, test: &str, place: Option<&Place>) -> Result<Value
                 screen(&display, Some(region), None, w, h)
             };
             let config = RecordConfig {
+                hold: false,
                 dir: dir.to_path_buf(),
                 screen: Some(screen),
                 mic: Some(String::new()),
@@ -344,6 +348,7 @@ fn run(dir: &std::path::Path, test: &str, place: Option<&Place>) -> Result<Value
                 .ok_or("No camera was found. Connect one, or skip this test.")?;
             let (cw, ch) = sessions::camera_size(camera.width, camera.height);
             let config = RecordConfig {
+                hold: false,
                 dir: dir.to_path_buf(),
                 screen: None,
                 mic: Some(String::new()),
@@ -390,6 +395,7 @@ fn run(dir: &std::path::Path, test: &str, place: Option<&Place>) -> Result<Value
                 screen(&display, Some(region), None, w, h)
             };
             let config = RecordConfig {
+                hold: false,
                 dir: dir.to_path_buf(),
                 screen: Some(screen),
                 mic: None,

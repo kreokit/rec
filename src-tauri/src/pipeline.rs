@@ -258,7 +258,8 @@ impl Core {
                 t0: now + 0.5,
                 fps,
                 paused_total: 0.0,
-                pause_start: None,
+                // Held: paused from the first moment until `resume` (RecordConfig::hold).
+                pause_start: config.hold.then_some(now + 0.5),
                 pauses: Vec::new(),
                 stop_at: f64::INFINITY,
                 screen,

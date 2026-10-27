@@ -1039,6 +1039,7 @@ mod tests {
         let _timing = alone();
         let dir = temp_dir("linux-x11");
         let config = RecordConfig {
+            hold: false,
             dir: dir.clone(),
             screen: Some(ScreenConfig {
                 display_id: 0,

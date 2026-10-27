@@ -976,6 +976,7 @@ mod tests {
     /// The real display (CI's Windows VM has one, ~32 Hz; docs/capture-research.md).
     fn screen(dir: std::path::PathBuf, region: Option<Region>, w: u32, h: u32) -> RecordConfig {
         RecordConfig {
+            hold: false,
             dir,
             screen: Some(ScreenConfig {
                 display_id: 0,

@@ -1218,6 +1218,7 @@ void *kr_rec_start(const KrRecConfig *config, char *error, size_t error_len) {
 
         double now = hostSeconds();
         rec->t0 = now + 0.5;
+        if (config->hold) rec->pauseStart = rec->t0; // kr_rec_resume begins the recording
         atomic_store(&rec->synthNow, now);
         if (config->synthetic) {
             if (config->screen) {

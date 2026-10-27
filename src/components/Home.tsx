@@ -75,6 +75,7 @@ export function Home({
   const [os, setOs] = useState<Os>("macos");
   const [systemAudio, setSystemAudio] = useState(last.systemAudio);
   const [quality, setQuality] = useState(last.quality);
+  const [countdown, setCountdown] = useState(true);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [recent, setRecent] = useState<Session[] | null>(null);
   const [pending, setPending] = useState<Session[]>([]);
@@ -87,6 +88,14 @@ export function Home({
     api.pendingRecoveries().then(setPending, () => setPending([]));
   }, []);
   useEffect(refresh, [refresh]);
+
+  useEffect(() => {
+    api.countdownPref().then(setCountdown, () => {});
+  }, []);
+  const chooseCountdown = (on: boolean) => {
+    setCountdown(on);
+    api.setCountdownPref(on).catch((e) => toast(String(e), "error"));
+  };
 
   useEffect(() => {
     api.devices().then((devices) => {
@@ -233,10 +242,11 @@ export function Home({
       region: chosenRegion,
       window: chosenWindow,
       system_audio: systemAudio,
+      countdown,
     };
     setBusy(true);
     try {
-      onStart(await api.startRecording(options));
+      onStart(await api.startRecording(options, display));
     } catch (e) {
       toast(String(e), "error");
       setBusy(false);
@@ -374,6 +384,17 @@ export function Home({
                 options={[
                   { value: "1080", label: "1080p" },
                   { value: "720", label: "720p" },
+                ]}
+              />
+            </Field>
+            <Field label="Countdown" hint={countdown ? "3-2-1 before recording; Esc cancels" : undefined}>
+              <Segmented
+                label="Countdown"
+                value={countdown ? "on" : "off"}
+                onChange={(v) => chooseCountdown(v === "on")}
+                options={[
+                  { value: "on", label: "3 s" },
+                  { value: "off", label: "Off" },
                 ]}
               />
             </Field>

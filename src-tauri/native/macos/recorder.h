@@ -46,6 +46,9 @@ typedef struct {
     int camera_bitrate;               // bits per second
     // 1: record the computer's sound (ScreenCaptureKit, macOS 13+) into system.mp4, AAC stereo.
     int system_audio;
+    // 1: start paused at the recording's first moment (devices open, nothing written);
+    // kr_rec_resume begins it. For the countdown.
+    int hold;
     // Tests: generated sources instead of real devices (a frame counter on the screen and
     // the camera, a click every second on the mic, see recorder.m). synthetic_fast runs them as fast as
     // the encoder allows on their own clock (a simulated hour in minutes);

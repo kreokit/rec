@@ -371,6 +371,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let rec = Recorder::start(&RecordConfig {
+            hold: false,
             dir: dir.clone(),
             screen: Some(ScreenConfig {
                 region: None,

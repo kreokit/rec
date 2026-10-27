@@ -20,6 +20,7 @@ pub fn pending(recordings: &Recordings) -> Vec<Session> {
         // Only checked at start; a running recording is never "pending".
         return Vec::new();
     }
+    recordings.remove_stale_countdowns();
     recordings
         .all()
         .into_iter()

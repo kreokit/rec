@@ -100,7 +100,7 @@ export interface Estimate {
   free_bytes: number | null;
 }
 
-export type State = "recording" | "paused" | "finishing" | "done" | "recovered" | "failed";
+export type State = "countdown" | "recording" | "paused" | "finishing" | "done" | "recovered" | "failed";
 
 export interface Status {
   elapsed: number;
@@ -198,6 +198,8 @@ export interface Options {
   region: Region | null;
   window: WindowChoice | null;
   system_audio: boolean;
+  /** Count 3-2-1 first (the recording is held until the countdown ends). */
+  countdown: boolean;
 }
 
 /** Finish choices (src-tauri/src/finish.rs). */
@@ -339,7 +341,14 @@ export const api = {
   regionOpen: (display: Display, region: Region | null) => invoke<void>("region_open", { display, region }),
   /** From the overlay: the chosen region, or null when cancelled. */
   regionDone: (region: Region | null) => invoke<void>("region_done", { region }),
-  startRecording: (options: Options) => invoke<Session>("start_recording", { options }),
+  /** With a countdown: opens it over `display` and holds the recording until it ends. */
+  startRecording: (options: Options, display: Display) => invoke<Session>("start_recording", { options, display }),
+  /** From the countdown window: begin the recording ("recording-began" goes to the main window). */
+  countdownDone: () => invoke<Session>("countdown_done"),
+  /** Esc during the countdown: nothing is kept ("recording-cancelled" goes to the main window). */
+  countdownCancel: () => invoke<void>("countdown_cancel"),
+  countdownPref: () => invoke<boolean>("countdown_pref"),
+  setCountdownPref: (on: boolean) => invoke<void>("set_countdown_pref", { on }),
   pauseRecording: () => invoke<Session>("pause_recording"),
   resumeRecording: () => invoke<Session>("resume_recording"),
   liveStatus: () => invoke<Live | null>("live_status"),

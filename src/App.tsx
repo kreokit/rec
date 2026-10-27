@@ -70,7 +70,7 @@ function App() {
           onFinish={(session) => setScreen({ name: "finish", session })}
         />
       )}
-      {screen.name === "recording" && <Recording session={screen.session} onDone={finished} />}
+      {screen.name === "recording" && <Recording session={screen.session} onDone={finished} onCancelled={home} />}
       {screen.name === "finish" && <Finish session={screen.session} onHome={home} />}
       {screen.name === "tests" && <TestScreen onApp={home} />}
       <ToastRegion />
