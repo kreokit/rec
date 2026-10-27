@@ -58,7 +58,7 @@ still the active app with the key window.
 | Control window | Click on Pause | Click on its background |
 |---|---|---|
 | Tauri `focusable(false)` only | **Rec becomes active** (probe loses the keyboard) | – |
-| + non-activating panel class and style | Rec becomes active | Rec becomes active |
+| + non-activating panel class and style | Rec becomes active | – (not measured with the control confirmed on screen) |
 | + the window server's "prevents activation" flag | **probe keeps the keyboard**, Pause works | probe keeps it |
 
 - An NSWindow can't be non-activating; the control's window becomes an `NSPanel` subclass in
