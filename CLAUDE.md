@@ -165,6 +165,7 @@ Details and numbers: `docs/m5-results.md`; choices in `docs/m5-plan.md`.
 
 - Every item of `docs/manual-checklist.md` passed **on the dev Mac (macOS 12)**, including the real region recording (a black or wrong-place region must fail it). Other systems: for v0.1.0-alpha only the friends' informal OK (no measured results, user's decision 2026-10-28); the release notes list what is only informally tested (`docs/release-notes/v0.1.0-alpha.md`, "Tested so far"). Keep that list true when the release is drafted.
 - After publishing, update the kreokit/.github profile README row (link to `/releases`, published apps first) and the "How to install" section.
+- After publishing, update the tag and file names in kreokit/website data/apps.json.
 
 ## Windows and Linux (M3 part B, steps 9–14: done, passing on CI, 2026-10-27)
 
