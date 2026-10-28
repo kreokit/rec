@@ -147,7 +147,13 @@ fn lgpl(ffmpeg: &Path) -> Result<(), String> {
         .output()
         .map_err(|e| format!("cannot run {}: {e}", ffmpeg.display()))?;
     let text = String::from_utf8_lossy(&out.stdout);
-    for flag in ["--enable-gpl", "--enable-nonfree", "--enable-version3"] {
+    // As scripts/verify_ffmpeg.py: `--enable-version3` (LGPL v3) is fine.
+    for flag in [
+        "--enable-gpl",
+        "--enable-nonfree",
+        "--enable-libx264",
+        "--enable-libx265",
+    ] {
         if text.contains(flag) {
             return Err(format!("the bundled FFmpeg was built with {flag}"));
         }
