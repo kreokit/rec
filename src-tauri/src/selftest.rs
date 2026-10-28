@@ -500,6 +500,8 @@ fn export_bubble(dir: &Path, session: &Session, work: &Path) -> Result<(), Strin
             "the export's pictures are out of order: {report:?}"
         ));
     }
+    // A marker on the trim's first frame may have its click a few ms before the trim
+    // (measured on the dev Mac: the click 5 ms early, cut off).
     sync("export", &report, 1)
 }
 
