@@ -42,6 +42,7 @@ mod jpeg;
 mod layout;
 mod loudness;
 mod native;
+mod panics;
 mod pipeline;
 mod polish;
 mod preview;
@@ -1741,6 +1742,11 @@ pub fn bench_main() -> Option<i32> {
     bench::main(&std::env::args().collect::<Vec<_>>())
 }
 
+/// Logs every panic, on any thread (`panics.rs`); first thing in `main`.
+pub fn install_panic_hook() {
+    panics::install();
+}
+
 /// The hidden `--self-test` mode for release CI (see `selftest.rs`). `args` excludes the
 /// program name; `None` for a normal start.
 pub fn self_test(args: &[String]) -> Option<std::process::ExitCode> {
@@ -1830,6 +1836,9 @@ pub fn run() {
             fieldtest::fieldtest_save
         ])
         .setup(|app| {
+            if let Ok(dir) = app.path().app_log_dir() {
+                panics::log_to(&dir);
+            }
             // Linux keeps the screen portal's restore tokens there.
             #[cfg(target_os = "linux")]
             native::set_data_dir(app.path().app_data_dir()?);
