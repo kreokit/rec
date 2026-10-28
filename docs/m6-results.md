@@ -35,6 +35,34 @@ Intel build on macOS 12.
 - **Draft now at 50bf2eb** (run 40634368394, all green); the Intel .dmg checked again on
   the dev Mac: entitlements present, signature valid, `--self-test` ok (29 s).
 
+## Second rebuild: crash after Stop (2026-10-28)
+
+- **Report:** the installed draft (50bf2eb, Intel, macOS 12.7.6) ended with SIGABRT on a
+  tokio worker right after Stop (`rec-2026-10-28-111943.ips`). The recording itself was
+  safe: 20.6 s whole display + FaceTime camera + mic, state `done`, no problems in its
+  check; the crash came while Finish made the sound preview (`voice-clean.flac` written,
+  `sound-clean-tutorial.m4a.part` left).
+- **Symbolicated:** the shipped binary is stripped; the "Release symbols" workflow
+  rebuilt 50bf2eb on the same runner and toolchain (rustc 1.99.1) without stripping. Its
+  code isn't byte-identical (1376 bytes shorter: the strip setting changes rustc's flags),
+  so the frames were mapped by aligning the two function-start tables (6448 of 6543
+  functions aligned, every crashed one) and named with `atos` in the twin:
+  `tauri::protocol::asset::get` → wry `url_scheme_handler::start_task` responses inside
+  `objc2::exception::catch` → `core::panicking::panic_in_cleanup` → `panic_nounwind` →
+  `std::process::abort`.
+- **Cause:** WebKit throws an Objective-C exception when an answer reaches a request the
+  media player already stopped (the preview switching to the new sound file). wry catches
+  it with `objc2::exception::catch`, which objc2 documents as impossible under
+  `panic = "abort"`, and the release profile had exactly that. Reproduced on the dev Mac
+  with objc2 0.6.5: SIGABRT ("panic in a function that cannot unwind") with abort, caught
+  with unwind. Debug builds and the test app unwind, so they never showed it.
+- **Fix (2ce241a):** release profile `panic = "unwind"`. **Tests:** the self-test throws an
+  Objective-C exception and catches it as wry does (a `panic=abort` build of Rec aborts
+  there: checked); a unit test keeps the release profile at unwind.
+- **Panics are logged (c2d7d48):** every panic, on any thread, is appended to
+  `panics.log` in the app's log folder (macOS `~/Library/Logs/com.kreokit.rec/`) with
+  version, thread, place, message and backtrace; then Rust's usual message.
+
 ## `rec --self-test` (synthetic sources only)
 
 Record 1080p screen + 720p camera + mic in real time (countdown hold, pause 1.5 s,
