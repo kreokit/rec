@@ -107,3 +107,26 @@ recording), so the thresholds were moved for the measurement instead of filling 
   copy (synthetic sources), it stopped the recording, Finish opened, check clean.
 - Another app holding the keys: the recording goes on and the main window says so. Linux on
   Wayland: not offered (Home says to stop with the recording controls).
+
+## Step 8: recording at 60 fps (dev Mac, real screen, the user's OK)
+
+`--bench fresh --fps 60` (capture 60, one frame per 1/60 s slot, 1.5× the 30 fps bitrate),
+1728×1080; recordings deleted after the analysis.
+
+| Run | Fresh | Stale | Late / dropped | CPU (% of one core) |
+|---|---|---|---|---|
+| CGDisplayStream, 60 s | 95.81 % | 121 | 0 / 0 | 22.1 % |
+| CGDisplayStream, 60 s | 96.02 % | 115 | 0 / 0 | 21.4 % |
+| CGDisplayStream, 60 s | 95.60 % | 127 | 0 / 0 | 20.7 % |
+| ScreenCaptureKit, Rec's windows kept out, 60 s | 94.60 % | 156 | 0 / 0 | 21.1 % |
+| ScreenCaptureKit, Rec's windows kept out, 60 s | 91.72 % | 239 | 0 / 0 | 23.3 % |
+| CGDisplayStream + camera 720p + mic, 10 min | 94.31 % | 1646 | 0 / 0 | 32.9 % |
+
+- The encoder keeps up (nothing late or dropped; the 10-minute run's tracks start and end
+  together, no sound filled or dropped), but **4–8 % of the frames repeat an older picture**:
+  a 60 Hz display sampled at 60 fps has no slack, as 30 fps sampled at 30 measured 98.1 % in
+  M2. At 30 fps the app captures 60 and keeps one per slot (99.86 %).
+- **Decision (the plan's rule, ≥ 99 % fresh):** 60 fps is **not offered on this Mac**; Home
+  keeps "30 fps". Windows and Linux stay at 30 until friends' numbers exist; the friends'
+  checklist gets a 60 fps item (step 10), and 60 fps is offered per system only where it
+  measures ≥ 99 % there.
