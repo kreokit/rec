@@ -79,7 +79,7 @@
   -webkit-mask-image: -webkit-radial-gradient(white, black);
 }
 
-.stage-camera.bubble {
+.stage-camera.stage-bubble {
   cursor: move;
   touch-action: none;
 }

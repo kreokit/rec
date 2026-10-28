@@ -84,7 +84,7 @@ export function Stage({
         )}
         {media.camera && (
           <div
-            className={inBubble ? "stage-camera bubble" : layout === "camera" ? "stage-camera" : "stage-camera hidden"}
+            className={inBubble ? "stage-camera stage-bubble" : layout === "camera" ? "stage-camera" : "stage-camera hidden"}
             style={
               cam
                 ? {

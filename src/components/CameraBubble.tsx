@@ -34,7 +34,7 @@ export function CameraBubble() {
     void work().catch((e) => toast(String(e), "error"));
 
   return (
-    <div className="bubble" role="img" aria-label="Camera" {...drag}>
+    <div className="recording-bubble" role="img" aria-label="Camera" {...drag}>
       {src ? <img src={src} alt="" draggable={false} /> : <span className="bubble-wait">Camera</span>}
       {tools && (
         <div className="bubble-tools">

@@ -29,4 +29,42 @@ describe("layout", () => {
     const bubble: Bubble = { shape: "rounded", size: "large", x: 0.5, y: 0.5 };
     expect(positionAt(bubble, 1728, 1080, -500, 5000)).toEqual({ x: 0, y: 1 });
   });
+
+  // Dragged far past every edge and corner, in every shape and size: the bubble stays
+  // inside the picture with its margin, and a circle stays round (radius = half its size).
+  it.each([
+    [1728, 1080],
+    [1080, 1920],
+    [1280, 720],
+  ])("a bubble dragged past the edges stays inside a %i×%i picture", (w, h) => {
+    const short = Math.min(w, h);
+    const margin = Math.round(short * 0.03);
+    for (const shape of ["circle", "rounded"] as const) {
+      for (const size of ["small", "medium", "large"] as const) {
+        for (const [left, top] of [
+          [-9999, -9999],
+          [9999, -9999],
+          [-9999, 9999],
+          [9999, 9999],
+          [w / 2, -9999],
+          [w / 2, 9999],
+          [-9999, h / 2],
+          [9999, h / 2],
+        ]) {
+          const start: Bubble = { shape, size, x: 0.5, y: 0.5 };
+          const p = place("bubble", { ...start, ...positionAt(start, w, h, left, top) }, [w, h], [1280, 720]);
+          const c = p.camera!;
+          const what = `${shape} ${size} dragged to (${left}, ${top}): ${JSON.stringify(c)}`;
+          expect(c.x, what).toBeGreaterThanOrEqual(margin - 1);
+          expect(c.y, what).toBeGreaterThanOrEqual(margin - 1);
+          expect(c.x + c.width, what).toBeLessThanOrEqual(w - margin + 1);
+          expect(c.y + c.height, what).toBeLessThanOrEqual(h - margin + 1);
+          if (shape === "circle") {
+            expect(c.width, what).toBe(c.height);
+            expect(p.radius, what).toBe(c.height / 2);
+          }
+        }
+      }
+    }
+  });
 });
