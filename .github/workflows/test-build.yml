@@ -129,6 +129,13 @@ jobs:
           echo "deb depends: $deps"
           [[ "$deps" != *indicator* ]] || { echo "the .deb depends on an AppIndicator library"; exit 1; }
           echo "no AppIndicator libraries"
+      # macOS ends the app when it uses the mic or camera without the usage texts or, under
+      # the hardened runtime, without the device entitlements (the v0.1.0-alpha draft crashed
+      # on "Allow" for the microphone, 2026-10-28).
+      - name: Check the macOS app may use the microphone and camera
+        if: runner.os == 'macOS'
+        run: |
+          python scripts/check_macos_privacy.py src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
       # The test version runs on macOS 12 too (the dev Mac), so the same check as releases.
       - name: Check the macOS binaries run on macOS 12
         if: runner.os == 'macOS'

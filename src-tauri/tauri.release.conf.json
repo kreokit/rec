@@ -10,7 +10,8 @@
     "category": "Video",
     "shortDescription": "Free, offline screen recorder: screen, camera and microphone into a clean MP4.",
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
     },
     "resources": {
       "../THIRD-PARTY-LICENSES.md": "THIRD-PARTY-LICENSES.md",

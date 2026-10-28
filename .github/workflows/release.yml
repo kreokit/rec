@@ -181,9 +181,6 @@ jobs:
             plist="$app/Contents/Info.plist"
             /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist" | grep -qx com.kreokit.rec
             /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist"
-            # macOS never asks for the camera or microphone without these texts.
-            /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" "$plist"
-            /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$plist"
           else
             res="$out"; bin="$out"
           fi
@@ -208,6 +205,13 @@ jobs:
           [[ "$deps" != *indicator* ]] || { echo "the .deb depends on an AppIndicator library"; exit 1; }
           echo "no AppIndicator libraries"
 
+      # macOS ends the app when it uses the mic or camera without the usage texts or, under
+      # the hardened runtime, without the device entitlements (the v0.1.0-alpha draft crashed
+      # on "Allow" for the microphone, 2026-10-28).
+      - name: Check the macOS app may use the microphone and camera
+        if: runner.os == 'macOS'
+        run: |
+          python scripts/check_macos_privacy.py src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
       # The runners have a new macOS, where everything runs; this catches what would only
       # fail on macOS 12 (weak imports from a newer SDK such as ScreenCaptureKit's audio,
       # a too-new minimum macOS).
