@@ -93,6 +93,9 @@ Intel build on macOS 12.
   rows (video pixels): export 33…300 / 40…293, preview 33.0…299.4 / 40.1…292.3, circle
   maths 33.1…300.9 / 40.4…293.6.
 
+- **Draft now at 0659814** (run 40682832556, all green); the Intel .dmg checked on the dev
+  Mac: entitlements, signature, `--self-test` ok.
+
 ## `rec --self-test` (synthetic sources only)
 
 Record 1080p screen + 720p camera + mic in real time (countdown hold, pause 1.5 s,
