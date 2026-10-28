@@ -350,6 +350,11 @@ impl Core {
         }
     }
 
+    /// Ends the bubble's pictures (`set_preview`); whether there were any.
+    pub fn take_preview(&self) -> bool {
+        self.preview.lock().unwrap().take().is_some()
+    }
+
     /// Small JPEGs of the recorded camera from now on, `width` × `height`, into `publisher`.
     pub fn set_preview(&self, publisher: crate::preview::Publisher, width: u32, height: u32) {
         *self.preview.lock().unwrap() = Some((publisher, width, height, f64::NEG_INFINITY));

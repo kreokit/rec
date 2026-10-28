@@ -32,7 +32,8 @@ sha2 = "0.10.9"
 # macos-private-api: the see-through region overlay (app.macOSPrivateApi).
 tauri = { version = "2", features = ["macos-private-api", "protocol-asset"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# float_roundtrip: session.json reads back exactly what was saved.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 # EBU R128 loudness and true peak (port of libebur128), as in KreoKit Voice.

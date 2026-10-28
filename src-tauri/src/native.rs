@@ -686,6 +686,10 @@ mod portable {
         /// Stops and finishes the files. The error (a source or file failed during the
         /// recording) comes with the final status: the files are kept either way.
         pub fn stop(self) -> (Status, Option<String>) {
+            // The bubble's pictures end with the recording (as recorder.m's tap does).
+            if self.0.core().take_preview() {
+                crate::preview::stop();
+            }
             self.0.stop()
         }
     }
