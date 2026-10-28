@@ -69,6 +69,30 @@ Intel build on macOS 12.
   repeated, −8…+1 ms). The Intel .dmg checked on the dev Mac: entitlements, signature,
   `--self-test` ok including the Objective-C exception step (29.7 s).
 
+## Third rebuild: Finish's bubble outside the preview (2026-10-28)
+
+- **Report:** in Finish the camera bubble was drawn over the right side panel, as a rounded
+  square with Circle chosen. Reproduced at once in the check copy (synthetic recording,
+  no drag): a 200×200 box at (1057, 577) in the 1280×800 window = the layout's
+  percentages for a Medium bubble at the bottom right applied to the **whole window**,
+  not the 733×458 picture; the inline pixel radius (57 px) on that box made the rounded
+  square.
+- **Cause:** M5's recording-bubble rule `.bubble { position: fixed; inset: 0; … }`
+  (bubble.css) also matched Finish's `stage-camera bubble` (M4): every stylesheet is
+  bundled into one. Fixed positioning made the window its containing block and escaped
+  the picture's `overflow: hidden`. Not the coordinates or the clamping (both right).
+- **Fix (0659814):** `.recording-bubble` and `.stage-bubble`. **Tests:**
+  `src/styles/classes.test.ts` fails when a class styled on its own in one stylesheet
+  is used in another (it found exactly this before the fix); `layout.test.ts` drags past
+  every edge in every shape and size.
+- **Found on the way (7fdb4e1):** vitest replaced every stylesheet with an empty string,
+  so `webkit.test.ts` (macOS 12 prefixes) had checked nothing since M1; `css.include`
+  in vite.config.ts gives the tests the real CSS (it passes).
+- **Checked in the check copy:** dragged past the bottom right and past the top left:
+  the bubble stays in the picture with its margin, round. Exported and compared on two
+  rows (video pixels): export 33…300 / 40…293, preview 33.0…299.4 / 40.1…292.3, circle
+  maths 33.1…300.9 / 40.4…293.6.
+
 ## `rec --self-test` (synthetic sources only)
 
 Record 1080p screen + 720p camera + mic in real time (countdown hold, pause 1.5 s,
