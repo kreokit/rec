@@ -1,0 +1,248 @@
+# Builds unsigned KreoKit Rec bundles for macOS (Apple Silicon + Intel), Windows and Linux
+# and uploads them to a DRAFT GitHub pre-release. Run it from the Actions tab ("Run
+# workflow", optionally with another tag) or by pushing a v* tag.
+# Adapted from KreoKit Voice and Clips (FFmpeg sidecars, checks, self-test), with Rec's
+# build from the "Test version" workflow (Ubuntu 24.04 for PipeWire, no AppIndicator).
+# Nothing is uploaded unless every check of that build passed.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        default: v0.1.0-alpha
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: Tests and licence checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Linux packages for Tauri, PipeWire, ALSA and V4L2 (bindgen needs clang), Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            librsvg2-dev libpipewire-0.3-dev libspa-0.2-dev \
+            libasound2-dev clang libclang-dev xvfb
+      - name: Our LGPL FFmpeg for the recorder and probe tests
+        run: |
+          python scripts/fetch_ffmpeg.py x86_64-unknown-linux-gnu
+          echo "KREOKIT_FFMPEG=$PWD/src-tauri/binaries/ffmpeg-x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+          echo "KREOKIT_FFPROBE=$PWD/src-tauri/binaries/ffprobe-x86_64-unknown-linux-gnu" >> "$GITHUB_ENV"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm build
+      - name: Rust tests
+        working-directory: src-tauri
+        run: xvfb-run -a -s "-screen 0 1280x720x24" cargo test --locked
+      - name: Rust dependency licences (cargo-deny)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check licenses bans sources
+      - name: THIRD-PARTY-LICENSES.md is up to date
+        run: python scripts/third_party.py --check
+
+  release:
+    name: Draft release
+    needs: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A pre-release, never "Latest" (decided 2026-10-21: no release shows Latest).
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --draft --prerelease --latest=false --target "$GITHUB_SHA" \
+              --title "KreoKit Rec ${TAG#v}" \
+              --notes-file "docs/release-notes/$TAG.md"
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+            bundles: app,dmg
+          - name: macOS Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: app,dmg
+          - name: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          # PipeWire 0.3.53+ for cpal's PipeWire host (Ubuntu 24.04 and newer desktops).
+          - name: Linux x64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}-release
+
+      - name: Linux packages for Tauri, PipeWire, ALSA and V4L2
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev \
+            librsvg2-dev libfuse2 libpipewire-0.3-dev \
+            libspa-0.2-dev libasound2-dev clang libclang-dev
+
+      # FFmpeg sidecars: LGPL builds only (src-tauri/binaries/README.md).
+      - name: Cache macOS FFmpeg build
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: target-ffmpeg
+          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
+      - name: Tools to build FFmpeg
+        if: runner.os == 'macOS'
+        run: brew install meson ninja pkgconf nasm
+      - name: Fetch or build FFmpeg
+        run: python scripts/fetch_ffmpeg.py ${{ matrix.target }} --reuse
+      - name: Verify FFmpeg (LGPL, encoders, a recovery remux)
+        run: python scripts/verify_ffmpeg.py ${{ matrix.target }}
+
+      - run: pnpm install --frozen-lockfile
+      # Build only; the files are uploaded at the end, once the checks below have passed.
+      - name: Build
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.conf.json
+
+      - name: Check the bundle contents
+        run: |
+          out="src-tauri/target/${{ matrix.target }}/release"
+          exe=""; [[ "${{ runner.os }}" == "Windows" ]] && exe=".exe"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            app=$(ls -d "$out"/bundle/macos/*.app)
+            res="$app/Contents/Resources"; bin="$app/Contents/MacOS"
+            codesign --verify --deep --strict "$app" && echo "ad-hoc signature ok"
+            plist="$app/Contents/Info.plist"
+            /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist" | grep -qx com.kreokit.rec
+            /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$plist"
+            # macOS never asks for the camera or microphone without these texts.
+            /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" "$plist"
+            /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$plist"
+          else
+            res="$out"; bin="$out"
+          fi
+          for f in "$res/THIRD-PARTY-LICENSES.md" "$res/licenses/FFMPEG-LICENSE.txt" \
+                   "$res/licenses/RNNOISE-COPYING.txt" \
+                   "$bin/ffmpeg$exe" "$bin/ffprobe$exe"; do
+            [[ -f "$f" ]] && echo "ok  $f" || { echo "missing $f"; exit 1; }
+          done
+
+      # No tray on Linux: libayatana-indicator (a dependency of the AppIndicator library) is
+      # GPL-3.0 and must never be bundled (THIRD-PARTY-LICENSES.md, "System libraries").
+      - name: Check no AppIndicator libraries are bundled
+        if: runner.os == 'Linux'
+        run: |
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          cd "$RUNNER_TEMP" && rm -rf squashfs-root
+          "$GITHUB_WORKSPACE/$bundle"/appimage/*.AppImage --appimage-extract > /dev/null
+          found=$(find squashfs-root \( -iname '*indicator*' -o -iname '*dbusmenu*' \) -print)
+          [[ -z "$found" ]] || { echo "AppIndicator libraries bundled:"; echo "$found"; exit 1; }
+          deps=$(dpkg-deb -f "$GITHUB_WORKSPACE/$bundle"/deb/*.deb Depends)
+          echo "deb depends: $deps"
+          [[ "$deps" != *indicator* ]] || { echo "the .deb depends on an AppIndicator library"; exit 1; }
+          echo "no AppIndicator libraries"
+
+      # The runners have a new macOS, where everything runs; this catches what would only
+      # fail on macOS 12 (weak imports from a newer SDK such as ScreenCaptureKit's audio,
+      # a too-new minimum macOS).
+      - name: Check the macOS binaries run on macOS 12
+        if: runner.os == 'macOS'
+        run: |
+          python scripts/check_macos_binary.py --min-macos "$MACOSX_DEPLOYMENT_TARGET" \
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+
+      # Runs the shipped binary with the bundled FFmpeg on the synthetic sources (no real
+      # screen, camera or mic; no display needed): record with a pause, recover a killed
+      # recording, export a bubble layout, each checked (src-tauri/src/selftest.rs).
+      - name: Self-test the release binary
+        run: |
+          out="src-tauri/target/${{ matrix.target }}/release"
+          case "${{ runner.os }}" in
+            macOS) exe=$(ls -d "$out"/bundle/macos/*.app)/Contents/MacOS/rec ;;
+            Windows) exe="$out/rec.exe" ;;
+            *) exe="$out/rec" ;;
+          esac
+          "$exe" --self-test
+
+      # Only now, after every check above passed, do files go to the draft release; a failed
+      # check never uploads anything.
+      - name: Upload to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bundle="src-tauri/target/${{ matrix.target }}/release/bundle"
+          rm -rf upload && mkdir upload
+          case "${{ runner.os }}" in
+            macOS) cp "$bundle"/dmg/*.dmg upload/ ;;
+            Windows) cp "$bundle"/nsis/*-setup.exe upload/ ;;
+            *) cp "$bundle"/appimage/*.AppImage "$bundle"/deb/*.deb upload/ ;;
+          esac
+          for f in upload/*; do mv "$f" "upload/$(basename "$f" | tr ' ' '.')"; done
+          ls -l upload
+          gh release upload "$TAG" upload/* --clobber
