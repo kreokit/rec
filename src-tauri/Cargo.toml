@@ -62,6 +62,11 @@ tokio = { version = "1", features = ["rt", "time"] }
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 rec-tray-feature = { path = "tray-feature" }
 
+# The self-test catches an Objective-C exception the way wry does; already in the tree
+# through wry, with the same feature.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.5", features = ["exception"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-capture = "2.0.1"
 cpal = "0.18.2"
@@ -85,5 +90,9 @@ opt-level = 1
 codegen-units = 1
 lto = true
 opt-level = 3
-panic = "abort"
+# Not "abort": wry catches the Objective-C exception WebKit throws when the preview player
+# stops a request (objc2::exception::catch), and that only works when Rust can unwind;
+# with "abort" the release crashed after Stop (v0.1.0-alpha draft, 2026-10-28,
+# docs/m6-results.md). A test in lib.rs and the self-test keep it so.
+panic = "unwind"
 strip = true

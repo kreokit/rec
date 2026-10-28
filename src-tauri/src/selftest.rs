@@ -4,7 +4,8 @@
 //! as screen and camera, a click every second as the mic; never a real device) and exits
 //! non-zero on any failure. It runs before Tauri starts, so it needs no window or display.
 //!
-//! 1. FFmpeg is the bundled one (release builds) and an LGPL build.
+//! 1. FFmpeg is the bundled one (release builds) and an LGPL build. On macOS, an
+//!    Objective-C exception is caught as wry catches WebKit's (needs `panic = "unwind"`).
 //! 2. Record through `Recordings` and the real recorder, in real time: 1080p screen, 720p
 //!    camera and mic, held under a countdown, begun, paused and resumed, about 10 s. The
 //!    after-recording check finds no problems; the frame counter shows no missing picture
@@ -113,6 +114,8 @@ fn run(work: &Path) -> Result<(), String> {
         bundled(&ffprobe)?;
         lgpl(&ffmpeg)?;
     }
+    #[cfg(target_os = "macos")]
+    objc_exception_caught()?;
 
     let recordings = recordings(work.join("recordings"));
     let session = record(&recordings)?;
@@ -137,6 +140,27 @@ fn bundled(tool: &Path) -> Result<(), String> {
             "{} isn't the bundled one (next to the executable)",
             tool.display()
         ))
+    }
+}
+
+/// WebKit throws an Objective-C exception when the preview player has stopped a request
+/// that then gets its answer; wry catches it with `objc2::exception::catch`. That works
+/// only when Rust can unwind: with `panic = "abort"` this aborts the whole app (the
+/// v0.1.0-alpha draft crashed so after Stop, 2026-10-28).
+#[cfg(target_os = "macos")]
+fn objc_exception_caught() -> Result<(), String> {
+    unsafe extern "C-unwind" {
+        fn kr_selftest_throw();
+    }
+    // SAFETY: kr_selftest_throw only throws; the exception is caught right here.
+    let caught = objc2::exception::catch(std::panic::AssertUnwindSafe(|| unsafe {
+        kr_selftest_throw()
+    }));
+    if caught.is_err() {
+        println!("objc:     an Objective-C exception is caught (as wry does for WebKit)");
+        Ok(())
+    } else {
+        Err("the Objective-C exception wasn't thrown".into())
     }
 }
 
@@ -562,6 +586,28 @@ fn gray_rows(video: &Path, x: u32, y: u32, width: u32) -> Result<Vec<Vec<u8>>, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The release must unwind (see `objc_exception_caught`); tests always do, so only the
+    /// manifest shows what the release does.
+    #[test]
+    fn the_release_unwinds() {
+        let manifest =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap();
+        let release = manifest.split("[profile.release]").nth(1).unwrap();
+        let release = release.split("\n[").next().unwrap();
+        let panic: Vec<&str> = release
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("panic"))
+            .collect();
+        assert_eq!(panic, ["panic = \"unwind\""], "{release}");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn catches_an_objective_c_exception() {
+        objc_exception_caught().unwrap();
+    }
 
     #[test]
     fn runs_only_when_asked() {
