@@ -22,6 +22,8 @@ the items they cover:
 | Test on the screen | Items | Passes when |
 |---|---|---|
 | Whole screen (30 s) | 2 | pattern read in every picture, fresh ≥ 99 %, check clean |
+| Whole screen at 60 fps (30 s) | 10 | the same at 60 fps; failing it only means 60 fps isn't offered there (note the number) |
+| KreoKit's own windows kept out (15 s) | 11 | the pattern window never shows moving in the recording (only where the system can keep windows out) |
 | Part of the screen (20 s) | 3, 4 | the same for a region around the pattern (a black or shifted region fails) |
 | One window (20 s) | 4b | the same for the pattern window recorded as a window |
 | Sound and picture together (30 s, space bar) | 5 | ≥ 10 presses matched; flash − click between −40 and +110 ms |
@@ -46,6 +48,12 @@ stay manual (and are covered on CI by the simulated hour and the kill -9 tests).
 | 7 | Long run | `--bench fresh --camera --mic --seconds 600` | fresh ≥ 99 %, no camera frames dropped after the start, tracks end within one frame, check clean; note the CPU |
 | 8 | Crash safety | record from the app, kill it (`kill -9`), reopen, Recover | at most 1–2 s lost, the check after recovery clean |
 | 9 | Computer sound (macOS 13+, Windows, Linux) | record with Computer sound on while a video plays | the sound is in the recording and in sync |
+| 10 | 60 fps (M5) | Tests screen, or `--bench fresh --fps 60 --seconds 60` (×3) and `--fps 60 --camera --mic --seconds 600` | fresh ≥ 99 % in every run, nothing late or dropped: only then 60 fps may be offered on that system (the dev Mac measured 92–96 %: not offered, `docs/m5-results.md`) |
+| 11 | Rec's windows kept out (macOS 12.3+, Windows 10 2004+) | Tests screen; then in the app: record the display with the camera on, play it | the floating control, the camera bubble and the countdown never appear in the video |
+| 12 | Countdown, floating control, stop shortcut | record with the countdown on; while typing in another app, click Pause and Resume on the floating control; stop with ⌥⇧⌘S (Ctrl+Alt+Shift+S) | no 3-2-1 in the video; the other app keeps the keyboard while clicking; the shortcut stops the recording from any app and Finish opens |
+| 13 | Menu bar / tray (where Rec's windows would be recorded: one display, and Windows before 2004 or a Mac where `KREOKIT_REC_NO_EXCLUSION=1` is set in a test build) | record the display; use the menu bar item / tray icon | the time shows and counts; Pause/Resume and Stop work; Linux: no tray icon, the window waits in the taskbar and the shortcut stops |
+| 14 | Camera bubble | record with the camera on; drag the bubble; click it: S, M, L, Hide | it shows you (mirrored) while recording, follows the drag, changes size keeping its corner, Hide leaves the camera recording; place and size are kept for the next recording |
+| 15 | Disk space (only with a disk that is really getting full; never fill a disk for the test) | record with less than 30 min of room | Home warns; while recording a note at 10 min left and red at 2; the recording stops by itself before the disk is full and Finish opens with a note |
 
 Results go into the milestone's results doc (e.g. `docs/m3-results.md`) with the date and
 the system.

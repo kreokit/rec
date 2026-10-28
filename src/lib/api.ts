@@ -272,7 +272,7 @@ export interface Media {
 }
 
 /** The test version's tests (src-tauri/src/fieldtest.rs). */
-export type FieldTest = "screen" | "region" | "window" | "sync" | "camera" | "sound";
+export type FieldTest = "screen" | "screen60" | "exclude" | "region" | "window" | "sync" | "camera" | "sound";
 
 export interface FieldTestInfo {
   app: string;
@@ -285,6 +285,8 @@ export interface FieldTestInfo {
   cameras: { name: string; width: number; height: number }[];
   computer_sound: boolean;
   windows: boolean;
+  /** Rec's own windows can be kept out of display recordings. */
+  exclusion: boolean;
   encoder: string;
 }
 

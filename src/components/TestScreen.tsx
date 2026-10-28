@@ -28,6 +28,20 @@ export function testsFor(info: FieldTestInfo): TestItem[] {
       window: "pattern",
     },
     !portal && {
+      id: "screen60",
+      title: "Whole screen at 60 frames a second",
+      steps: "The moving squares again, recorded at 60 frames a second. Don't touch anything for 30 seconds.",
+      seconds: 30,
+      window: "pattern",
+    },
+    info.exclusion && {
+      id: "exclude",
+      title: "KreoKit's own windows kept out",
+      steps: "The moving squares again; this time the recording must leave them out. Don't touch anything for 15 seconds.",
+      seconds: 15,
+      window: "pattern",
+    },
+    !portal && {
       id: "region",
       title: "Part of the screen",
       steps: "The same window again; only the area around it is recorded. Don't touch anything for 20 seconds.",

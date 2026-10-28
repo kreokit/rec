@@ -127,6 +127,7 @@ pub async fn fieldtest_info() -> Value {
             "cameras": native::cameras().iter().map(|c| json!({ "name": c.name, "width": c.width, "height": c.height })).collect::<Vec<_>>(),
             "computer_sound": native::system_audio_supported(),
             "windows": native::window_capture_supported(),
+            "exclusion": native::exclusion_supported(),
             "encoder": encoder.unwrap_or_else(|e| format!("none: {e}")),
         })
     })
@@ -257,6 +258,72 @@ fn run(dir: &std::path::Path, test: &str, place: Option<&Place>) -> Result<Value
             let status = record(&config, 30.0)?;
             let g = pattern_geometry(AT.0 * s, AT.1 * s, p.width * s);
             fresh_result(dir, &status, &g, "screen")
+        }
+        // Item 10: the whole display at 60 fps (M5: offered only where this passes).
+        "screen60" => {
+            let p = need_place()?;
+            let (w, h) = sessions::output_size(display.width, display.height, 1080);
+            let s = w as f64 / display.width as f64 * p.scale;
+            let mut sc = screen(&display, None, None, w, h);
+            (sc.fps, sc.capture_fps) = (60, 60);
+            sc.bitrate = sc.bitrate * 3 / 2;
+            let config = RecordConfig {
+                hold: false,
+                dir: dir.to_path_buf(),
+                screen: Some(sc),
+                mic: None,
+                camera: None,
+                system_audio: false,
+                synthetic: None,
+            };
+            let status = record(&config, 30.0)?;
+            let g = pattern_geometry(AT.0 * s, AT.1 * s, p.width * s);
+            fresh_result_at(dir, &status, &g, "60 fps screen", 60)
+        }
+        // Item 11: the app's own windows kept out of a display recording (macOS 12.3+,
+        // Windows 10 2004+): the pattern window is kept out, so it must never show moving.
+        "exclude" => {
+            let p = need_place()?;
+            let (w, h) = sessions::output_size(display.width, display.height, 1080);
+            let s = w as f64 / display.width as f64 * p.scale;
+            let mut sc = screen(&display, None, None, w, h);
+            sc.exclude_windows = vec![p.window_id];
+            let config = RecordConfig {
+                hold: false,
+                dir: dir.to_path_buf(),
+                screen: Some(sc),
+                mic: None,
+                camera: None,
+                system_audio: false,
+                synthetic: None,
+            };
+            #[cfg(windows)]
+            native::exclude_from_capture(p.window_id as isize, true);
+            let recorded = record(&config, 15.0);
+            #[cfg(windows)]
+            native::exclude_from_capture(p.window_id as isize, false);
+            let status = recorded?;
+            let g = pattern_geometry(AT.0 * s, AT.1 * s, p.width * s);
+            let frames = testpattern::read_frames(&dir.join("screen.mp4"), &g)?;
+            // The pattern steps every frame while it shows; what's behind it doesn't.
+            let moving = frames
+                .windows(2)
+                .filter(|f| matches!(f[1].counter.checked_sub(f[0].counter), Some(1..=3)))
+                .count();
+            let share = moving as f64 / frames.len().max(1) as f64;
+            let check = crate::check::check(dir, Some(&status), 30);
+            Ok(json!({
+                "passed": share < 0.01 && check.problems.is_empty(),
+                "summary": if share < 0.01 {
+                    "The test window was kept out of the recording.".to_string()
+                } else {
+                    format!("The test window shows in {:.0} % of the recording: it wasn't kept out.", share * 100.0)
+                },
+                "recorder": status,
+                "moving_share": share,
+                "frames": frames.len(),
+                "check": check,
+            }))
         }
         // Items 3 and 4: a region around the pattern, at the display's own pixels.
         "region" => {
@@ -443,9 +510,19 @@ fn fresh_result(
     g: &Geometry,
     what: &str,
 ) -> Result<Value, String> {
+    fresh_result_at(dir, status, g, what, 30)
+}
+
+fn fresh_result_at(
+    dir: &std::path::Path,
+    status: &Status,
+    g: &Geometry,
+    what: &str,
+    fps: u32,
+) -> Result<Value, String> {
     let frames = testpattern::read_frames(&dir.join("screen.mp4"), g)?;
-    let report = testpattern::report(&frames, &[], g, 30.0);
-    let check = crate::check::check(dir, Some(status), 30);
+    let report = testpattern::report(&frames, &[], g, fps as f64);
+    let check = crate::check::check(dir, Some(status), fps);
     let readable = report.frames > 0 && report.bad == 0;
     let passed = readable && report.fresh_percent >= 99.0 && check.problems.is_empty();
     let summary = if !readable {
