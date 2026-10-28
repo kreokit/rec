@@ -1,0 +1,73 @@
+# Rebuilds a release's macOS binary exactly as the Release workflow does, but not stripped,
+# so crash reports from that release can be symbolicated (`atos -o rec -l <load address>`).
+# Stripping removes only the symbol table: compare the __text section with the shipped
+# binary before trusting the names. The binary is a workflow artifact, never a release file.
+name: Release symbols
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit the release was built from
+        required: true
+      target:
+        description: Rust target
+        required: true
+        default: x86_64-apple-darwin
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Unstripped ${{ inputs.target }} at ${{ inputs.ref }}
+    runs-on: ${{ inputs.target == 'x86_64-apple-darwin' && 'macos-15-intel' || 'macos-15' }}
+    timeout-minutes: 90
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "12.0"
+      CARGO_PROFILE_RELEASE_STRIP: "false"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ inputs.target }}
+      - name: Cache macOS FFmpeg build
+        uses: actions/cache@v4
+        with:
+          path: target-ffmpeg
+          key: ffmpeg-${{ inputs.target }}-${{ hashFiles('scripts/build-ffmpeg-macos.sh') }}
+      - name: Tools to build FFmpeg
+        run: brew install meson ninja pkgconf nasm
+      - name: Fetch or build FFmpeg
+        run: python scripts/fetch_ffmpeg.py ${{ inputs.target }} --reuse
+      - run: pnpm install --frozen-lockfile
+      - name: Build (as the Release workflow, not stripped)
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: --target ${{ inputs.target }} --bundles app --config src-tauri/tauri.release.conf.json
+      - name: Collect
+        run: |
+          rustc --version
+          mkdir -p out
+          cp "$(ls -d src-tauri/target/${{ inputs.target }}/release/bundle/macos/*.app)/Contents/MacOS/rec" out/rec
+          dwarfdump --uuid out/rec
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rec-symbols-${{ inputs.target }}-${{ inputs.ref }}
+          path: out/rec
+          retention-days: 90
