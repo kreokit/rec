@@ -56,3 +56,18 @@ html.control-window #root {
 .control-button + .control-button {
   margin-left: calc(var(--space-2) * -1);
 }
+
+/* Little disk space left: instead of the level (the full sentence is its tooltip). */
+.control-disk {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font: var(--text-meta);
+  color: var(--color-text-2);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.control-disk.alert {
+  color: var(--color-danger);
+}

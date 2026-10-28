@@ -278,12 +278,16 @@ pub struct Live {
     pub session: Session,
     pub status: Status,
     pub free_bytes: Option<u64>,
+    /// Minutes until the disk-space stop at this recording's size per minute.
+    pub minutes_left: Option<f64>,
 }
 
 struct Active {
     session: Session,
     dir: PathBuf,
     capture: Box<dyn Capture>,
+    /// The expected size per minute (`bytes_per_minute`), for the minutes left.
+    bytes_per_minute: u64,
 }
 
 pub struct Recordings {
@@ -291,6 +295,12 @@ pub struct Recordings {
     backend: Box<dyn Backend>,
     /// Every recording from synthetic sources (dev and test builds, `KREOKIT_REC_SYNTHETIC`).
     pub synthetic: Option<crate::native::Synthetic>,
+    /// `START_BELOW_FREE` and `STOP_BELOW_FREE` (changed only by measurements).
+    pub start_below_free: u64,
+    pub stop_below_free: u64,
+    /// Called (from the heartbeat thread) when the disk is almost full: the recording is
+    /// paused for good by then, and the app stops and finishes it (`stop`).
+    pub on_disk_full: Option<Arc<dyn Fn() + Send + Sync>>,
     active: Arc<Mutex<Option<Active>>>,
     heartbeat: Mutex<Option<(Arc<AtomicBool>, JoinHandle<()>)>>,
 }
@@ -352,10 +362,25 @@ fn folder_name(ms: u64) -> String {
 pub fn write_session(dir: &Path, session: &Session) -> Result<(), String> {
     let json = serde_json::to_string_pretty(session).map_err(|e| e.to_string())?;
     let temp = dir.join("session.json.tmp");
-    fs::write(&temp, json).map_err(|e| format!("cannot save the recording's details: {e}"))?;
+    if let Err(e) = fs::write(&temp, json) {
+        let _ = fs::remove_file(&temp);
+        return Err(format!("cannot save the recording's details: {e}"));
+    }
     fs::rename(&temp, dir.join("session.json"))
         .map_err(|e| format!("cannot save the recording's details: {e}"))
 }
+
+/// What the recording says when its details couldn't be saved at the stop (the disk was
+/// full): the files are finished and checked anyway, and the next start offers to recover it.
+/// Minutes of recording before the disk-space stop, at `bytes_per_minute`.
+pub fn minutes_left(free: u64, stop_below_free: u64, bytes_per_minute: u64) -> f64 {
+    free.saturating_sub(stop_below_free) as f64 / bytes_per_minute.max(1) as f64
+}
+
+/// The note on a recording stopped by the disk-space stop.
+pub const DISK_FULL_STOP: &str = "The recording stopped by itself because the disk is almost full. Everything up to that moment is kept. Free up some space before the next recording.";
+
+const DETAILS_NOT_SAVED: &str = "The disk was full when the recording stopped. Its files are kept: free up some space, then reopen KreoKit Rec to recover it.";
 
 pub fn read_session(dir: &Path) -> Option<Session> {
     serde_json::from_str(&fs::read_to_string(dir.join("session.json")).ok()?).ok()
@@ -367,6 +392,9 @@ impl Recordings {
             root,
             backend,
             synthetic: None,
+            start_below_free: START_BELOW_FREE,
+            stop_below_free: STOP_BELOW_FREE,
+            on_disk_full: None,
             active: Arc::new(Mutex::new(None)),
             heartbeat: Mutex::new(None),
         }
@@ -404,10 +432,10 @@ impl Recordings {
         }
         fs::create_dir_all(&self.root)
             .map_err(|e| format!("The recordings folder can't be created ({e}). Check that the disk isn't full or read-only."))?;
-        if disk::free_bytes(&self.root).is_some_and(|free| free < START_BELOW_FREE) {
+        if disk::free_bytes(&self.root).is_some_and(|free| free < self.start_below_free) {
             return Err(format!(
                 "Less than {} of disk space is free. Free up some space, then record again.",
-                disk::gigabytes(START_BELOW_FREE)
+                disk::gigabytes(self.start_below_free)
             ));
         }
         let created_at = now_ms();
@@ -529,10 +557,18 @@ impl Recordings {
             screen.own_windows_kept_out = capture.own_windows_kept_out();
             let _ = write_session(&dir, &session);
         }
+        let bytes_per_minute = bytes_per_minute(
+            width,
+            height,
+            camera,
+            options.mic_id.is_some(),
+            options.system_audio,
+        );
         *active = Some(Active {
             session: session.clone(),
             dir,
             capture,
+            bytes_per_minute,
         });
         drop(active);
         self.start_heartbeat();
@@ -545,26 +581,36 @@ impl Recordings {
         let stop = Arc::new(AtomicBool::new(false));
         let active = self.active.clone();
         let flag = stop.clone();
+        let stop_below_free = self.stop_below_free;
+        let on_disk_full = self.on_disk_full.clone();
         let handle = std::thread::spawn(move || {
             let _awake = awake::KeepAwake::new("recording");
             while !flag.load(Ordering::SeqCst) {
                 std::thread::sleep(Duration::from_millis(250));
                 let mut guard = active.lock().unwrap();
                 let Some(a) = guard.as_mut() else { break };
+                let mut full = false;
                 let status = a.capture.status();
                 a.session.elapsed_s = status.elapsed;
                 let _ = write_session(&a.dir, &a.session);
                 if a.session.error.is_none()
                     && a.session.state != State::Countdown
-                    && disk::free_bytes(&a.dir).is_some_and(|free| free < STOP_BELOW_FREE)
+                    && disk::free_bytes(&a.dir).is_some_and(|free| free < stop_below_free)
                 {
-                    a.session.error = Some(
-                        "The recording stopped because the disk is almost full. Everything up to that moment is kept.".into(),
-                    );
-                    // Paused for good: the files stay as they are until Stop finishes them.
+                    a.session.error = Some(DISK_FULL_STOP.into());
+                    // Nothing more is written; the app stops and finishes it right away
+                    // (`on_disk_full`), with room to spare (docs/m5-results.md, step 7).
                     a.capture.pause();
                     a.session.state = State::Paused;
                     let _ = write_session(&a.dir, &a.session);
+                    full = true;
+                }
+                drop(guard);
+                if full {
+                    if let Some(stop) = &on_disk_full {
+                        stop();
+                    }
+                    break;
                 }
             }
         });
@@ -661,10 +707,13 @@ impl Recordings {
         let status = a.capture.status();
         let mut session = a.session.clone();
         session.elapsed_s = status.elapsed;
+        let free_bytes = disk::free_bytes(&a.dir);
         Some(Live {
             session,
             status,
-            free_bytes: disk::free_bytes(&a.dir),
+            free_bytes,
+            minutes_left: free_bytes
+                .map(|free| minutes_left(free, self.stop_below_free, a.bytes_per_minute)),
         })
     }
 
@@ -676,6 +725,7 @@ impl Recordings {
             mut session,
             dir,
             capture,
+            ..
         } = self
             .active
             .lock()
@@ -683,7 +733,9 @@ impl Recordings {
             .take()
             .ok_or("Nothing is being recorded.")?;
         session.state = State::Finishing;
-        write_session(&dir, &session)?;
+        // A full disk can't even take this: the files are finished below regardless (never
+        // lose a recording, docs/m5-results.md step 7).
+        let _ = write_session(&dir, &session);
         let (status, error) = capture.stop();
         self.stop_heartbeat();
         session.elapsed_s = status.elapsed;
@@ -697,7 +749,10 @@ impl Recordings {
             State::Failed
         };
         session.check = Some(result);
-        write_session(&dir, &session)?;
+        if write_session(&dir, &session).is_err() {
+            // session.json still says it was recording: the next start offers to recover it.
+            session.error = Some(DETAILS_NOT_SAVED.into());
+        }
         Ok(session)
     }
 
@@ -1041,6 +1096,151 @@ pub mod tests {
         write_session(&stale, &left).unwrap();
         assert!(crate::recovery::pending(&recordings).is_empty());
         assert!(!stale.exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Measurement (docs/m5-results.md, step 7) on the volume in `KREOKIT_MEASURE_DISK` (a
+    /// small disk image, never a real disk), synthetic sources as fast as the encoder allows:
+    /// A, the disk-space stop set 60 MB below the free space at the start (what the stop and
+    /// finishing do, what they need); B, the volume filled up to 40 MB free and the stop off
+    /// (what a really full disk does to the files). Only with that set:
+    /// `KREOKIT_MEASURE_DISK=DIR cargo test --lib measure_disk_full -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    #[cfg(target_os = "macos")]
+    fn measure_disk_full() {
+        let Some(volume) = std::env::var_os("KREOKIT_MEASURE_DISK") else {
+            eprintln!("set KREOKIT_MEASURE_DISK to a scratch volume to measure");
+            return;
+        };
+        let volume = PathBuf::from(volume);
+        for scenario in ["A", "B"] {
+            let root = volume.join("recordings");
+            let filler = volume.join("filler");
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_file(&filler);
+            fs::create_dir_all(&root).unwrap();
+            let mut recordings = Recordings::new(root.clone(), Box::new(NativeBackend));
+            recordings.synthetic = Some(crate::native::Synthetic {
+                fast: true,
+                ..Default::default()
+            });
+            recordings.start_below_free = 0;
+            if scenario == "A" {
+                recordings.stop_below_free = disk::free_bytes(&root).unwrap() - 10_000_000;
+            } else {
+                recordings.stop_below_free = 0;
+                let leave = 40_000_000;
+                let size = disk::free_bytes(&root).unwrap() - leave;
+                let f = fs::File::create(&filler).unwrap();
+                f.set_len(size).unwrap(); // sparse on APFS: written out below
+                drop(f);
+                let status = Command::new("dd")
+                    .args(["if=/dev/zero", "bs=1m", "conv=notrunc"])
+                    .arg(format!("of={}", filler.display()))
+                    .arg(format!("count={}", size / 1_048_576))
+                    .status()
+                    .unwrap();
+                assert!(status.success());
+            }
+            let mut opts = options();
+            opts.camera_id = Some("synthetic".into());
+            (opts.camera_width, opts.camera_height) = (1280, 720);
+            let free_start = disk::free_bytes(&root).unwrap();
+            let session = recordings.start(&opts).unwrap();
+            let started = Instant::now();
+            let (mut lowest, mut trigger, mut failed_at) = (u64::MAX, None, None);
+            while started.elapsed() < Duration::from_secs(300) {
+                let live = recordings.live().unwrap();
+                let free = live.free_bytes.unwrap_or(0);
+                lowest = lowest.min(free);
+                if live.status.failed && failed_at.is_none() {
+                    failed_at = Some((free, live.status.elapsed));
+                }
+                if live.session.error.is_some() || (scenario == "B" && live.status.failed) {
+                    trigger = Some((free, live.status.elapsed, started.elapsed().as_secs_f64()));
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let free_at_stop_call = disk::free_bytes(&root).unwrap();
+            let stopping = Instant::now();
+            let done = recordings.stop();
+            let stop_s = stopping.elapsed().as_secs_f64();
+            let free_after = disk::free_bytes(&root).unwrap();
+            let dir = root.join(&session.id);
+            // The files as they are, read back like the app's check does.
+            let files_check = crate::check::check(&dir, None, 30);
+            let sizes: Vec<(String, u64)> = fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .map(|e| {
+                    (
+                        e.file_name().to_string_lossy().into(),
+                        e.metadata().unwrap().len(),
+                    )
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({
+                    "scenario": scenario,
+                    "free_start": free_start,
+                    "trigger": trigger,
+                    "writer_failed_at": failed_at,
+                    "lowest_free_seen": lowest,
+                    "free_at_stop_call": free_at_stop_call,
+                    "stop_seconds": stop_s,
+                    "free_after_stop": free_after,
+                    "finishing_used_bytes": free_at_stop_call as i64 - free_after as i64,
+                    "stopped": done.as_ref().map(|d| (d.state, d.elapsed_s, d.error.clone(), d.check.clone())).map_err(|e| e.clone()),
+                    "files": sizes,
+                    "files_check": files_check,
+                })
+            );
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_file(&filler);
+        }
+    }
+
+    #[test]
+    fn counts_the_minutes_until_the_disk_space_stop() {
+        let per_minute = bytes_per_minute(1728, 1080, None, true, false);
+        let left = minutes_left(
+            STOP_BELOW_FREE + 10 * per_minute,
+            STOP_BELOW_FREE,
+            per_minute,
+        );
+        assert!((left - 10.0).abs() < 1e-9, "{left}");
+        assert_eq!(minutes_left(100, STOP_BELOW_FREE, per_minute), 0.0);
+    }
+
+    /// Needs ffmpeg: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn stops_by_itself_when_the_disk_is_almost_full() {
+        let root = temp_root("disk-full");
+        let mut recordings = fake(&root);
+        let called = Arc::new(AtomicU32::new(0));
+        let c = called.clone();
+        recordings.on_disk_full = Some(Arc::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+        }));
+        recordings.stop_below_free = u64::MAX; // "almost full" at once
+        recordings.start(&options()).unwrap();
+        let start = Instant::now();
+        while called.load(Ordering::SeqCst) == 0 {
+            assert!(start.elapsed() < Duration::from_secs(5), "never called");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let live = recordings.live().unwrap();
+        assert_eq!(live.session.state, State::Paused);
+        assert_eq!(live.minutes_left, Some(0.0));
+        // What the app does when called: stop and finish; the recording keeps its note.
+        let done = recordings.stop().unwrap();
+        assert_eq!(done.state, State::Done);
+        assert_eq!(done.error.as_deref(), Some(DISK_FULL_STOP));
+        assert_eq!(called.load(Ordering::SeqCst), 1, "once");
         let _ = fs::remove_dir_all(&root);
     }
 

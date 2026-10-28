@@ -56,7 +56,9 @@ function App() {
       toast(session.error ?? "Nothing was recorded.", "error");
       return home();
     }
-    toast(`Recording saved (${formatDuration(session.elapsed_s)}).`, "success");
+    // Stopped by itself (the disk was almost full): the note says why.
+    if (session.error) toast(`Recording saved (${formatDuration(session.elapsed_s)}). ${session.error}`, "info");
+    else toast(`Recording saved (${formatDuration(session.elapsed_s)}).`, "success");
     setScreen({ name: "finish", session });
   };
 

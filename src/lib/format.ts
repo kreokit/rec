@@ -25,6 +25,33 @@ export function formatRoom(freeBytes: number, bytesPerMinute: number): string {
   return hours < 10 ? `about ${hours} h ${minutes % 60} min` : `about ${hours} h`;
 }
 
+/** Under this many minutes of disk space left: a calm note; under DISK_ALERT_MINUTES: red. */
+export const DISK_NOTE_MINUTES = 10;
+export const DISK_ALERT_MINUTES = 2;
+/** Home warns before recording when the space holds less than this. */
+export const DISK_HOME_MINUTES = 30;
+
+/** Space a recording stops at (sessions.rs STOP_BELOW_FREE). */
+export const STOP_BELOW_FREE = 500_000_000;
+
+/** Minutes of recording the free space holds before the disk-space stop. */
+export function roomMinutes(freeBytes: number, bytesPerMinute: number): number {
+  return Math.max(0, freeBytes - STOP_BELOW_FREE) / Math.max(1, bytesPerMinute);
+}
+
+/** The disk note while recording, or null with enough space. */
+export function diskNote(minutesLeft: number | null | undefined): { text: string; alert: boolean } | null {
+  if (minutesLeft == null || minutesLeft > DISK_NOTE_MINUTES) return null;
+  const minutes = Math.max(0, Math.floor(minutesLeft));
+  return {
+    text:
+      minutes < 1
+        ? "Less than a minute of disk space left. The recording stops by itself before the disk is full."
+        : `About ${minutes} min of disk space left. The recording stops by itself before the disk is full.`,
+    alert: minutesLeft <= DISK_ALERT_MINUTES,
+  };
+}
+
 /** "14:32" (local time). */
 export function clockTime(ms: number): string {
   const d = new Date(ms);

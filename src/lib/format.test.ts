@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Session } from "./api";
-import { checkSummary, formatBytes, formatDuration, formatRoom, meterLevel } from "./format";
+import { checkSummary, diskNote, formatBytes, formatDuration, formatRoom, meterLevel, roomMinutes } from "./format";
 
 const session = (over: Partial<Session> = {}): Session => ({
   id: "2026-10-27-143200",
@@ -60,5 +60,19 @@ describe("format", () => {
       ok: false,
     });
     expect(checkSummary(session({ state: "failed", error: "Nothing could be recovered." })).ok).toBe(false);
+  });
+});
+
+describe("disk space", () => {
+  it("counts the room before the disk-space stop", () => {
+    expect(roomMinutes(500_000_000 + 30 * 56e6, 56e6)).toBeCloseTo(30);
+    expect(roomMinutes(100, 56e6)).toBe(0);
+  });
+  it("notes 10 minutes and less, alerts at 2", () => {
+    expect(diskNote(null)).toBeNull();
+    expect(diskNote(10.5)).toBeNull();
+    expect(diskNote(9.7)).toEqual({ text: expect.stringContaining("About 9 min"), alert: false });
+    expect(diskNote(2)?.alert).toBe(true);
+    expect(diskNote(0.4)?.text).toContain("Less than a minute");
   });
 });

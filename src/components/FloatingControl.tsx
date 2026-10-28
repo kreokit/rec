@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pause, Play, Square, X } from "lucide-react";
 import { Live, api } from "../lib/api";
-import { formatDuration } from "../lib/format";
+import { diskNote, formatDuration } from "../lib/format";
 import { useHandDrag } from "../lib/handDrag";
 import { ICON_STROKE, toast } from "../ui";
 import { LevelMeter } from "./LevelMeter";
@@ -28,6 +28,7 @@ export function FloatingControl() {
   const counting = session?.state === "countdown";
   const paused = session?.state === "paused";
   const stuck = !!session?.error;
+  const disk = diskNote(live?.minutes_left);
 
   const run = (action: () => Promise<unknown>) => () =>
     void action().catch((e) => {
@@ -49,7 +50,11 @@ export function FloatingControl() {
       <span className="control-time">
         {stopping ? "Finishing…" : counting ? "Starting…" : formatDuration(live?.status.elapsed ?? 0)}
       </span>
-      {session?.mic && (
+      {disk ? (
+        <span className={disk.alert ? "control-disk alert" : "control-disk"} title={disk.text}>
+          {live!.minutes_left! < 1 ? "<1" : Math.floor(live!.minutes_left!)} min of space left
+        </span>
+      ) : session?.mic && (
         <div className="control-level">
           <LevelMeter peak={live?.status.mic_peak ?? 0} off={paused || counting} />
         </div>

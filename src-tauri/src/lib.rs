@@ -949,6 +949,10 @@ struct Tray {
 #[cfg(any(target_os = "macos", windows))]
 static TRAY: std::sync::Mutex<Option<Tray>> = std::sync::Mutex::new(None);
 
+/// Under this many minutes of space left the controls say so (docs/m5-plan.md, choice 4).
+#[cfg(any(target_os = "macos", windows))]
+const DISK_NOTE_MINUTES: f64 = 10.0;
+
 /// What the menu bar shows: "● 0:12", "Paused 0:12", "Starting…".
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 fn tray_title(state: sessions::State, elapsed: f64) -> String {
@@ -1034,7 +1038,10 @@ fn tray_open(app: &AppHandle) -> Result<(), String> {
             while !stop_flag.load(Ordering::SeqCst) {
                 if let Some(live) = recordings(&app).live() {
                     let state = live.session.state;
-                    let title = tray_title(state, live.status.elapsed);
+                    let mut title = tray_title(state, live.status.elapsed);
+                    if let Some(left) = live.minutes_left.filter(|m| *m <= DISK_NOTE_MINUTES) {
+                        title.push_str(&format!(" · {} min of space left", left.floor()));
+                    }
                     if cfg!(target_os = "macos") {
                         let _ = icon.set_title(Some(&title));
                     }
@@ -1746,6 +1753,27 @@ pub fn run() {
             if synthetic().is_some() {
                 recordings.synthetic = Some(native::Synthetic::default());
             }
+            // Debug and test builds: KREOKIT_REC_DISK_STOP_AFTER_MB=N acts as if the disk
+            // were almost full N MB of recording from now (to try the stop in the app).
+            if cfg!(any(debug_assertions, feature = "bench")) {
+                let after = std::env::var("KREOKIT_REC_DISK_STOP_AFTER_MB").ok();
+                if let (Some(mb), Some(free)) = (
+                    after.and_then(|v| v.parse::<u64>().ok()),
+                    disk::free_bytes(recordings.root().parent().unwrap_or(recordings.root())),
+                ) {
+                    recordings.start_below_free = 0;
+                    recordings.stop_below_free = free.saturating_sub(mb * 1_000_000);
+                }
+            }
+            // The disk is almost full: stop and finish now, like the Stop button (the main
+            // window opens Finish with the note).
+            let handle = app.handle().clone();
+            recordings.on_disk_full = Some(std::sync::Arc::new(move || {
+                let app = handle.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = stop_recording(app).await;
+                });
+            }));
             app.manage(recordings);
             app.manage(SoundJob::default());
             app.manage(ExportState::default());

@@ -71,3 +71,29 @@ still the active app with the key window.
   by hand (pointer moves → `control_move`); dragged 100 × 338 points, it moved exactly that
   far, the probe kept the keyboard, and the place was remembered for that display.
 - No click → the probe stays active (the control's polling doesn't activate the app).
+
+## Step 7: disk space near full (dev Mac, synthetic sources, a scratch disk image)
+
+`measure_disk_full` (sessions.rs, only with `KREOKIT_MEASURE_DISK`): 1728×1080 screen + 720p
+camera + mic, as fast as the encoder allows, on a 2.6 GB APFS sparse image in the scratchpad
+(deleted afterwards). The synthetic picture compresses to almost nothing (≈ 13 kB/s of
+recording), so the thresholds were moved for the measurement instead of filling 1.5 GB.
+
+| Scenario | What happened |
+|---|---|
+| A: the disk-space stop 10 MB below the free space at the start | stopped 87 s in (672 s of recording); **finishing took 0.65 s and 128 KB**; screen, camera and mic 672.4 s each, check clean |
+| A, first run (stop never reached in 5 min) | finishing took 0.9 s and 2 MB; 2596.6 s, check clean |
+| B: the image filled to 40 MB free, the stop off | the writers failed at **20 MB "free"** (APFS keeps a reserve); the stop then **failed** before checking ("cannot save the recording's details", a 0-byte `session.json.tmp` left) |
+| B again, after the fix below | the stop finishes and checks: files play, 1443.0 of 1444.2 s (the last unfinished fragment lost, as in a crash); the recording says the disk was full and is offered for recovery at the next start |
+
+- **Fixed:** the stop no longer gives up when `session.json` can't be written: it finishes
+  and checks the files anyway, removes the half-written temporary file, and the recording's
+  note says the disk was full ("free up some space, then reopen KreoKit Rec to recover it").
+- **Margin:** finishing needs ≤ 2 MB and the heartbeat checks 4 times a second, so the stop
+  at **0.5 GB stays** (also leaves room for the system and for `session.json`).
+- **The stop now finishes by itself** (the user's choice): at 0.5 GB the recording pauses,
+  the app stops and finishes it like the Stop button, and Finish opens with the note. Tried
+  in the check copy (`KREOKIT_REC_DISK_STOP_AFTER_MB`, debug/test builds): the control showed
+  the red space note, the recording stopped by itself, Finish opened, check clean.
+- Warnings by minutes left at the recording's size per minute: a note at 10 min, red at 2
+  (recording screen, floating control, menu bar); Home warns under 30 min of room.

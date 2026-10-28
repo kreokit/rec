@@ -2,14 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Pause, Play, Square, TriangleAlert, X } from "lucide-react";
 import { Live, Session, api } from "../lib/api";
-import { formatBytes, formatDuration } from "../lib/format";
+import { diskNote, formatDuration } from "../lib/format";
 import { Button, ICON_STROKE, toast } from "../ui";
 import { LevelMeter } from "./LevelMeter";
 import { TopBar } from "./TopBar";
 import "../styles/recording.css";
-
-/** Warn when the disk has less than this left (the recording stops itself at 0.5 GB). */
-const LOW_SPACE = 2e9;
 
 /**
  * While recording: the time, pause/resume, stop and the microphone level. During the
@@ -81,7 +78,7 @@ export function Recording({
   };
 
   const failed = live?.status.failed;
-  const lowSpace = live?.free_bytes != null && live.free_bytes < LOW_SPACE;
+  const disk = diskNote(live?.minutes_left);
 
   return (
     <div className="screen">
@@ -129,15 +126,16 @@ export function Recording({
           )}
         </div>
 
-        {(failed || stuck || lowSpace) && (
+        {(failed || stuck || disk?.alert) && (
           <p className="rec-warning" role="alert">
             <TriangleAlert size={16} strokeWidth={ICON_STROKE} aria-hidden />
             {current.error ??
               (failed
                 ? "Something stopped working while recording. Stop now: everything recorded so far is kept and checked."
-                : `Only ${formatBytes(live!.free_bytes!)} of disk space left. The recording stops by itself before the disk is full.`)}
+                : disk!.text)}
           </p>
         )}
+        {!failed && !stuck && disk && !disk.alert && <p className="rec-hint">{disk.text}</p>}
 
         <p className="rec-hint">
           {current.screen?.window

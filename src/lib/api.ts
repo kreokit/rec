@@ -180,6 +180,8 @@ export interface Live {
   session: Session;
   status: Status;
   free_bytes: number | null;
+  /** Minutes until the disk-space stop at this recording's size per minute. */
+  minutes_left: number | null;
 }
 
 export interface Options {

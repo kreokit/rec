@@ -93,6 +93,24 @@
   border-top: 1px solid var(--color-border);
 }
 
+/* The size per minute and free space, and under them a low-space warning. */
+.setup-room {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* Less than 30 minutes of room (Home.tsx). */
+.setup-space-warning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font: var(--text-meta);
+  color: var(--color-warning);
+}
+
 .setup-size {
   flex: 1;
   font: var(--text-meta);

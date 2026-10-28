@@ -2,7 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Circle, Ellipsis, FolderOpen, LifeBuoy, Mic, Scissors, Trash2, TriangleAlert, Video } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Camera, Display, Estimate, Mic as MicDevice, Options, Os, Region, Session, Window, WindowChoice, api } from "../lib/api";
-import { checkSummary, clockTime, formatBytes, formatDuration, formatRoom, recordingTitle } from "../lib/format";
+import {
+  DISK_HOME_MINUTES,
+  checkSummary,
+  clockTime,
+  formatBytes,
+  formatDuration,
+  formatRoom,
+  recordingTitle,
+  roomMinutes,
+} from "../lib/format";
 import { regionPixels } from "../lib/region";
 import { Button, Field, ICON_STROKE, Menu, MenuEntry, Segmented, Select, Switch, toast, useContextMenu } from "../ui";
 import { CameraPreview } from "./CameraPreview";
@@ -429,16 +438,25 @@ export function Home({
             </Field>
           </div>
           <div className="setup-footer">
-            <p className="setup-size">
-              {estimate &&
-                `About ${formatBytes(estimate.bytes_per_minute)} per minute` +
-                  (estimate.free_bytes !== null
-                    ? ` · ${formatBytes(estimate.free_bytes)} free (${formatRoom(
-                        estimate.free_bytes,
-                        estimate.bytes_per_minute,
-                      )})`
-                    : "")}
-            </p>
+            <div className="setup-room">
+              <p className="setup-size">
+                {estimate &&
+                  `About ${formatBytes(estimate.bytes_per_minute)} per minute` +
+                    (estimate.free_bytes !== null
+                      ? ` · ${formatBytes(estimate.free_bytes)} free (${formatRoom(
+                          estimate.free_bytes,
+                          estimate.bytes_per_minute,
+                        )})`
+                      : "")}
+              </p>
+              {estimate && estimate.free_bytes !== null && roomMinutes(estimate.free_bytes, estimate.bytes_per_minute) < DISK_HOME_MINUTES && (
+                <p className="setup-space-warning" role="status">
+                  <TriangleAlert size={14} strokeWidth={ICON_STROKE} aria-hidden />
+                  Room for only about {Math.floor(roomMinutes(estimate.free_bytes, estimate.bytes_per_minute))} min. Free
+                  up disk space to record longer: the recording stops by itself before the disk is full.
+                </p>
+              )}
+            </div>
             <Button
               variant="primary"
               className="record-button"
