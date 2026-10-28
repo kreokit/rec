@@ -5,8 +5,8 @@ Intel build on macOS 12.
 
 ## Draft release
 
-- **v0.1.0-alpha**: draft pre-release (not Latest), target `4b037c6`, built by the Release
-  workflow run 40618286000 (all jobs green). Later commits up to this file change only
+- **v0.1.0-alpha**: draft pre-release (not Latest), first built at `4b037c6` (run
+  40618286000); rebuilt at `50bf2eb`, see below. Later commits up to this file change only
   comments and docs.
 - Files (match the table in `docs/release-notes/v0.1.0-alpha.md`):
   `KreoKit.Rec_0.1.0_aarch64.dmg` (38 MB), `KreoKit.Rec_0.1.0_x64.dmg` (41 MB),
@@ -15,6 +15,25 @@ Intel build on macOS 12.
 - The first run (e024378) failed on Windows and Linux in the self-test's own licence check,
   which refused `--enable-version3` (LGPL v3, which verify_ffmpeg.py and the other apps
   accept); fixed in 4b037c6 and the draft retargeted.
+
+## Rebuild after the user's test (2026-10-28)
+
+- **Bug:** the installed release crashed when the user clicked Allow for the microphone
+  (TCC: no `com.apple.security.device.audio-input`). Measured: Info.plist had both usage
+  texts (same as the test app apart from name, identifier, category, copyright); the
+  difference was the signature: release `flags=0x10002(adhoc,runtime)` without
+  entitlements, test app `flags=0x0(none)`. Under the hardened runtime macOS needs the
+  device entitlements. Fixed (5469a8b): `src-tauri/Entitlements.plist` (audio-input,
+  camera) in `tauri.release.conf.json`; `scripts/check_macos_privacy.py` fails a bundle
+  without the usage texts or, under the hardened runtime, without these entitlements
+  (verified: fails the old draft, passes the test app and the fixed build). Runs in the
+  Release and Test version workflows. The friends' test version was built with the same
+  config, so it likely had the same crash on macOS.
+- **Self-test on CI's Intel VM** then failed once: one screen marker −41.4 ms (the usual
+  −8.1 ms plus one frame) right after a repeated picture (a late frame goes into the next
+  slot). The sync rule is now per marker: one frame, or two right after a repeat (50bf2eb).
+- **Draft now at 50bf2eb** (run 40634368394, all green); the Intel .dmg checked again on
+  the dev Mac: entitlements present, signature valid, `--self-test` ok (29 s).
 
 ## `rec --self-test` (synthetic sources only)
 
