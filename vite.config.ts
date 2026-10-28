@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 // @ts-expect-error type error without @types/node package
@@ -7,6 +8,13 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(() => ({
   plugins: [react()],
+
+  // vitest replaces stylesheets with empty strings unless told otherwise, and the
+  // stylesheet tests (src/styles/*.test.ts) read them with `?raw`: without this they
+  // checked nothing (found 2026-10-28).
+  test: {
+    css: { include: [/.+/] },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
