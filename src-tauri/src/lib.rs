@@ -48,10 +48,10 @@ mod preview;
 mod probe;
 mod recovery;
 mod rnnoise;
+mod selftest;
 mod sessions;
 mod sound;
 mod synthetic;
-#[cfg(any(test, feature = "bench"))]
 mod testpattern;
 mod waveform;
 
@@ -1739,6 +1739,12 @@ fn report_problem(app: AppHandle) -> Result<(), String> {
 #[cfg(feature = "bench")]
 pub fn bench_main() -> Option<i32> {
     bench::main(&std::env::args().collect::<Vec<_>>())
+}
+
+/// The hidden `--self-test` mode for release CI (see `selftest.rs`). `args` excludes the
+/// program name; `None` for a normal start.
+pub fn self_test(args: &[String]) -> Option<std::process::ExitCode> {
+    selftest::run_if_requested(args)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
