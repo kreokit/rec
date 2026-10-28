@@ -63,6 +63,12 @@ Intel build on macOS 12.
   `panics.log` in the app's log folder (macOS `~/Library/Logs/com.kreokit.rec/`) with
   version, thread, place, message and backtrace; then Rust's usual message.
 
+- **Draft now at c2d7d48** (run 40675361204). Its first Intel attempt failed the self-test
+  on an overloaded CI VM (142 late and 57 dropped screen frames, counted and noted by the
+  recorder; earlier runs on that runner: 0–3); the re-run of that job was clean (0
+  repeated, −8…+1 ms). The Intel .dmg checked on the dev Mac: entitlements, signature,
+  `--self-test` ok including the Objective-C exception step (29.7 s).
+
 ## `rec --self-test` (synthetic sources only)
 
 Record 1080p screen + 720p camera + mic in real time (countdown hold, pause 1.5 s,
