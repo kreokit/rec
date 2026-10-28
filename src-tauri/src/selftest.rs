@@ -28,7 +28,7 @@ use crate::export::{self, Job};
 use crate::finish::Settings;
 use crate::native::{Status, Synthetic};
 use crate::sessions::{NativeBackend, Options, Recordings, Session, State};
-use crate::testpattern::{self, Geometry, Report};
+use crate::testpattern::{self, Frame, Geometry, Report};
 use crate::{ffmpeg, probe, recovery};
 
 /// Seconds recorded before and after the pause.
@@ -247,7 +247,7 @@ fn recording_matches(dir: &Path, session: &Session) -> Result<(), String> {
         session.camera.as_ref().map_or(0, |c| c.width),
     );
     let screen = pattern(dir, "screen.mp4", screen_w, 60.0)?;
-    show("screen", &screen);
+    show("screen", &screen.report);
     counted(
         "screen",
         &screen,
@@ -256,7 +256,7 @@ fn recording_matches(dir: &Path, session: &Session) -> Result<(), String> {
         &status,
     )?;
     let camera = pattern(dir, "camera.mp4", camera_w, 30.0)?;
-    show("camera", &camera);
+    show("camera", &camera.report);
     counted(
         "camera",
         &camera,
@@ -288,12 +288,24 @@ fn recording_matches(dir: &Path, session: &Session) -> Result<(), String> {
 
 /// The test pattern of `video` in `dir` (`width` wide, its counter stepping `rate` times a
 /// second) against the mic's clicks.
-fn pattern(dir: &Path, video: &str, width: u32, rate: f64) -> Result<Report, String> {
+fn pattern(dir: &Path, video: &str, width: u32, rate: f64) -> Result<Pattern, String> {
     let g = geometry(width, rate);
     let frames = testpattern::read_frames(&dir.join(video), &g)?;
     let (samples, start) = testpattern::read_audio(&dir.join("mic.mp4"))?;
     let clicks = testpattern::onsets(&samples, start, 0.25, 0.5);
-    Ok(testpattern::report(&frames, &clicks, &g, 30.0))
+    let report = testpattern::report(&frames, &clicks, &g, 30.0);
+    Ok(Pattern {
+        report,
+        frames,
+        clicks,
+    })
+}
+
+/// A picture's test pattern read back, with the clicks it is compared to.
+struct Pattern {
+    report: Report,
+    frames: Vec<Frame>,
+    clicks: Vec<f64>,
 }
 
 fn geometry(width: u32, rate: f64) -> Geometry {
@@ -316,7 +328,8 @@ fn show(what: &str, r: &Report) {
 /// No unreadable picture, as many frames as the recorder wrote, repeats only where it
 /// counted a late frame (and few of those), and every marker within a frame of its click
 /// (the pause may cut one click and keep its marker).
-fn counted(what: &str, r: &Report, frames: i64, late: i64, status: &Status) -> Result<(), String> {
+fn counted(what: &str, p: &Pattern, frames: i64, late: i64, status: &Status) -> Result<(), String> {
+    let r = &p.report;
     let fail = |why: &str| Err(format!("{what}: {why}: {r:?} {status:?}"));
     if r.bad > 0 || r.irregular_pts > 0 {
         return fail("unreadable pictures or irregular timestamps");
@@ -327,26 +340,41 @@ fn counted(what: &str, r: &Report, frames: i64, late: i64, status: &Status) -> R
     if r.stale > late as usize || late as usize > r.frames / 10 {
         return fail("pictures are missing");
     }
-    sync(what, r, 1)
+    sync(what, p, 1)
 }
 
-fn sync(what: &str, r: &Report, unmatched: usize) -> Result<(), String> {
-    let worst = r
-        .sync_ms_min
-        .zip(r.sync_ms_max)
-        .map(|(a, b)| a.abs().max(b.abs()));
-    let seconds = r.frames as f64 / 30.0;
-    match worst {
-        Some(w)
-            if w <= FRAME_MS
-                && r.unmatched_markers <= unmatched
-                && r.markers as f64 >= seconds - 2.0 =>
-        {
-            Ok(())
+/// Every marker within one frame of its click, or two right after a repeated picture: a
+/// late frame goes into the next slot, so its picture comes a frame late there (measured on
+/// CI's Intel Mac VM, 2026-10-28: −41.4 ms = the usual −8.1 ms and one frame, after a
+/// repeat). At most `unmatched` markers without a click, and one marker a second.
+fn sync(what: &str, p: &Pattern, unmatched: usize) -> Result<(), String> {
+    let r = &p.report;
+    let f = &p.frames;
+    let mut off = Vec::new();
+    for i in (0..f.len()).filter(|&i| f[i].marker && (i == 0 || !f[i - 1].marker)) {
+        let Some(d) = p
+            .clicks
+            .iter()
+            .map(|c| (c - f[i].pts) * 1000.0)
+            .min_by(|a, b| a.abs().total_cmp(&b.abs()))
+            .filter(|d| d.abs() < 100.0)
+        else {
+            continue;
+        };
+        let after_repeat = i >= 2 && f[i - 1].counter == f[i - 2].counter;
+        let limit = if after_repeat { 2.0 } else { 1.0 } * FRAME_MS;
+        if d.abs() > limit {
+            off.push(format!("{d:+.1} ms at {:.2} s", f[i].pts));
         }
-        _ => Err(format!(
-            "{what}: picture and sound are more than a frame apart, or markers are missing: {r:?}"
-        )),
+    }
+    let seconds = r.frames as f64 / 30.0;
+    if off.is_empty() && r.unmatched_markers <= unmatched && r.markers as f64 >= seconds - 2.0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "{what}: picture and sound are more than a frame apart ({}), or markers are missing: {r:?}",
+            off.join(", ")
+        ))
     }
 }
 
@@ -495,6 +523,12 @@ fn export_bubble(dir: &Path, session: &Session, work: &Path) -> Result<(), Strin
     let clicks = testpattern::onsets(&samples, start, peak * 0.5, 0.5);
     let report = testpattern::report(&frames, &clicks, &g, 30.0);
     show("export", &report);
+    let export = Pattern {
+        report,
+        frames,
+        clicks,
+    };
+    let report = &export.report;
     if report.bad > 0 || report.irregular_pts > 0 {
         return Err(format!(
             "the export's pictures are out of order: {report:?}"
@@ -502,7 +536,7 @@ fn export_bubble(dir: &Path, session: &Session, work: &Path) -> Result<(), Strin
     }
     // A marker on the trim's first frame may have its click a few ms before the trim
     // (measured on the dev Mac: the click 5 ms early, cut off).
-    sync("export", &report, 1)
+    sync("export", &export, 1)
 }
 
 /// One gray pixel row (`width` from `x`, at `y`) of every frame of `video`.
@@ -541,20 +575,44 @@ mod tests {
         );
     }
 
+    /// Markers every 30 frames (one a second); `delay` ms from picture to sound for each,
+    /// and the frame before marker `repeat` a repeated picture.
+    fn pattern_with(delays: &[f64], repeat: Option<usize>) -> Pattern {
+        let mut frames: Vec<Frame> = (0..delays.len() * 30)
+            .map(|i| Frame {
+                pts: i as f64 / 30.0,
+                counter: 2 * i as u32,
+                marker: i % 30 == 0,
+            })
+            .collect();
+        if let Some(k) = repeat {
+            frames[k * 30 - 1].counter = frames[k * 30 - 2].counter;
+        }
+        let clicks = delays
+            .iter()
+            .enumerate()
+            .map(|(k, d)| k as f64 + d / 1000.0)
+            .collect::<Vec<_>>();
+        let report = testpattern::report(&frames, &clicks, &geometry(640, 60.0), 30.0);
+        Pattern {
+            report,
+            frames,
+            clicks,
+        }
+    }
+
     #[test]
     fn the_sync_rule_allows_one_frame() {
-        let mut r = Report {
-            frames: 300,
-            markers: 10,
-            sync_ms_min: Some(-20.0),
-            sync_ms_max: Some(30.0),
-            ..Default::default()
-        };
-        assert!(sync("x", &r, 1).is_ok());
-        r.sync_ms_max = Some(40.0);
-        assert!(sync("x", &r, 1).is_err());
-        r.sync_ms_max = Some(30.0);
-        r.markers = 5;
-        assert!(sync("x", &r, 1).is_err());
+        assert!(sync("x", &pattern_with(&[-8.0, 30.0, -20.0, 0.0], None), 1).is_ok());
+        assert!(sync("x", &pattern_with(&[-8.0, -41.4, -8.0, 0.0], None), 1).is_err());
+        // One frame more right after a repeated picture (a late frame), not elsewhere.
+        assert!(sync("x", &pattern_with(&[-8.0, -41.4, -8.0, 0.0], Some(1)), 1).is_ok());
+        assert!(sync("x", &pattern_with(&[-8.0, -41.4, -8.0, 0.0], Some(2)), 1).is_err());
+        assert!(sync("x", &pattern_with(&[-8.0, -70.0, -8.0, 0.0], Some(1)), 1).is_err());
+        // Markers without clicks.
+        let mut p = pattern_with(&[0.0, 0.0, 0.0, 0.0], None);
+        p.clicks.truncate(2);
+        p.report = testpattern::report(&p.frames, &p.clicks, &geometry(640, 60.0), 30.0);
+        assert!(sync("x", &p, 1).is_err());
     }
 }
