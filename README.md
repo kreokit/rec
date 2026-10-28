@@ -8,6 +8,8 @@
 
 Part of [KreoKit](https://github.com/kreokit), free open-source creator tools.
 
+🌐 **Website: [kreokit.vercel.app/rec](https://kreokit.vercel.app/rec)**: download for your computer and see how to install it.
+
 > **Status:** alpha. Download it from [Releases](https://github.com/kreokit/rec/releases) (macOS, Windows, Linux).
 
 ## What it does
