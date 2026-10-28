@@ -3,7 +3,7 @@
 // Started as the app bundle (`open -n "KreoKit Rec Test.app" --args --bench ...`) so macOS
 // asks for permission for the app itself; `rec --bench-analyze DIR` reads the results.
 //
-//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--capture-fps 60] [--mic] [--camera] [--region|--window] [--exclude]
+//   --bench fresh --out DIR [--seconds 60] [--api auto|cgd|sck] [--fps 30|60] [--capture-fps 60] [--mic] [--camera] [--region|--window] [--exclude]
 //       A small window shows the test pattern of src/testpattern.rs: a counter that steps
 //       60 times a second and stands still for 2 s of every 10 s. The recording shows
 //       whether every output frame caught the newest picture (fresh), repeated it because
@@ -18,6 +18,8 @@
 //       black and white and flipping twice a second, standing in for the app's floating
 //       control, and asks the recorder to keep it out: the analysis counts the frames where
 //       its stripes show (0 when the exclusion works; CGDisplayStream can't exclude).
+//       --fps 60 records the screen at 60 frames a second (capture at 60 too, one frame per
+//       slot; 1.5 times the 30 fps bitrate); the camera stays at 30.
 //   --bench sync --out DIR [--seconds 45]
 //       The tap test for sound against picture. The window waits in front of everything
 //       until the user clicks it and presses space; that first press starts the
@@ -158,7 +160,7 @@ int kr_bench_main(int argc, const char **argv) {
     @autoreleasepool {
         NSString *mode = nil, *out = nil, *api = @"auto";
         double seconds = 0;
-        int captureFps = 60;
+        int captureFps = 60, fps = 30;
         BOOL mic = NO, camera = NO, region = NO, windowCapture = NO, exclude = NO;
         for (int i = 1; i < argc; i++) {
             const char *a = argv[i], *v = i + 1 < argc ? argv[i + 1] : "";
@@ -167,6 +169,7 @@ int kr_bench_main(int argc, const char **argv) {
             else if (!strcmp(a, "--seconds")) seconds = atof(v), i++;
             else if (!strcmp(a, "--api")) api = @(v), i++;
             else if (!strcmp(a, "--capture-fps")) captureFps = atoi(v), i++;
+            else if (!strcmp(a, "--fps")) fps = atoi(v), i++;
             else if (!strcmp(a, "--mic")) mic = YES;
             else if (!strcmp(a, "--camera")) camera = YES;
             else if (!strcmp(a, "--region")) region = YES;
@@ -185,7 +188,7 @@ int kr_bench_main(int argc, const char **argv) {
         }
         BOOL sync = [mode isEqual:@"sync"], clap = [mode isEqual:@"camera"];
         if (!out || !(sync || clap || [mode isEqual:@"fresh"])) {
-            fprintf(stderr, "usage: --bench fresh|sync|camera --out DIR [--seconds N] [--api auto|cgd|sck] [--capture-fps N] [--mic] [--camera] [--region|--window] [--exclude]\n");
+            fprintf(stderr, "usage: --bench fresh|sync|camera --out DIR [--seconds N] [--api auto|cgd|sck] [--fps 30|60] [--capture-fps N] [--mic] [--camera] [--region|--window] [--exclude]\n");
             return 2;
         }
         if (seconds <= 0) seconds = sync || clap ? 45 : 60;
@@ -297,10 +300,14 @@ int kr_bench_main(int argc, const char **argv) {
         cfg.screen = 1;
         cfg.width = w;
         cfg.height = h;
-        cfg.fps = 30;
+        if (fps != 30 && fps != 60) fps = 30;
+        if (captureFps < fps) captureFps = fps;
+        cfg.fps = fps;
+        info[@"fps"] = @(fps);
+        info[@"capture_fps"] = @(captureFps);
         cfg.capture_fps = captureFps;
         cfg.screen_api = [api isEqual:@"cgd"] ? KR_SCREEN_CGDISPLAYSTREAM : [api isEqual:@"sck"] ? KR_SCREEN_SCREENCAPTUREKIT : KR_SCREEN_AUTO;
-        cfg.video_bitrate = (int)(w * h * 30 * 0.13);
+        cfg.video_bitrate = (int)(w * h * 30 * 0.13 * (fps == 60 ? 1.5 : 1.0));
         cfg.region_x = area.origin.x;
         cfg.region_y = area.origin.y;
         cfg.region_width = area.size.width;

@@ -61,7 +61,8 @@ pub fn analyze(dir: &Path) -> Result<Value, String> {
     if let Some(pattern) = info.get("pattern") {
         let g: Geometry = serde_json::from_value(pattern.clone()).map_err(|e| e.to_string())?;
         let frames = testpattern::read_frames(&dir.join("screen.mp4"), &g)?;
-        let report = testpattern::report(&frames, &[], &g, 30.0);
+        let fps = info["fps"].as_u64().unwrap_or(30) as u32;
+        let report = testpattern::report(&frames, &[], &g, fps as f64);
         let lags = lag(&frames, &g);
         let mut result = json!({
             "recorder": info["status"],
@@ -84,7 +85,7 @@ pub fn analyze(dir: &Path) -> Result<Value, String> {
         if info["camera"] == true {
             // Every track: frames written vs in the files, start/end offsets (drift).
             let status: Option<Status> = serde_json::from_value(info["status"].clone()).ok();
-            result["check"] = json!(check::check(dir, status.as_ref(), 30));
+            result["check"] = json!(check::check(dir, status.as_ref(), fps));
             result["camera_pts"] = json!(regular_times(&packet_times(&dir.join("camera.mp4"))?));
         }
         return Ok(result);

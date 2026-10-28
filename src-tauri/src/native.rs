@@ -999,6 +999,33 @@ pub(crate) mod tests {
         check(&dir, false);
     }
 
+    /// Recording at 60 fps (M5 step 8): one picture per 1/60 s slot, every one new, sound
+    /// and camera along as at 30.
+    #[test]
+    fn records_at_60_fps() {
+        let _timing = alongside();
+        let dir = temp_dir("sixty");
+        let mut config = synthetic(dir.clone(), 640, 360, false);
+        config.screen.as_mut().unwrap().fps = 60;
+        config.screen.as_mut().unwrap().capture_fps = 60;
+        let rec = Recorder::start(&config).unwrap();
+        wait_for(&rec, 5.0);
+        let (status, error) = rec.stop();
+        assert_eq!(error, None);
+        assert!(
+            (status.frames as f64 / 60.0 - status.elapsed).abs() < 0.05,
+            "{status:?}"
+        );
+        assert_eq!(status.frames_new, status.frames, "{status:?}");
+        let report = analyze_dir(&dir, &Geometry::synthetic(640, 60, false), 60.0).unwrap();
+        assert_eq!(
+            (report.bad, report.irregular_pts, report.stale),
+            (0, 0, 0),
+            "{report:?}"
+        );
+        assert_eq!(report.max_step, 1, "every counter step: {report:?}");
+    }
+
     #[test]
     fn records_synthetic_screen_camera_and_mic() {
         let _timing = alongside();
