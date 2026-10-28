@@ -171,8 +171,9 @@ so only what was still queued in Rec (≤ 80 ms + the queue) is lost.
 
 "KreoKit Rec Test" (`com.kreokit.rec.test`, the "Test version" workflow) opens on a Tests
 screen that runs the manual checklist by clicking (`docs/manual-checklist.md`) and saves
-one results file. Results go here, per computer, before the M6 release:
+one results file.
 
-| Computer | Tests | Result |
-|---|---|---|
-| (none yet) | | |
+**Informal OK from friends on systems not named yet (2026-10-28):** they tried the test version informally
+and said it works; there are no results files and no numbers. For v0.1.0-alpha this replaces
+the measured results this section was waiting for (the user's decision): the release notes
+list what is only informally tested (`docs/release-notes/v0.1.0-alpha.md`).

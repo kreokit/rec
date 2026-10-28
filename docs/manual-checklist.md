@@ -3,8 +3,10 @@
 The automated tests use made-up sources: they go through the recorder, the encoder and the
 check, but **not through the system's real capture**. A real capture can fail in ways they
 can't see (on macOS 12 a region recorded black and every test passed). These items are run
-by hand on real devices before every release, on each system: the dev Mac (macOS 12), a
-macOS 13+ Mac, Windows and Linux (`CLAUDE.md`, "Release checklist"). Each item records the
+by hand on real devices before every release on the dev Mac (macOS 12). For v0.1.0-alpha the
+other systems (macOS 13+, Windows, Linux) have only an informal OK from friends, no measured
+results (the user's decision, 2026-10-28; `CLAUDE.md`, "Release checklist"); the release
+notes say what is only informally tested. Each item records the
 real screen, camera or microphone: only with the person's OK, recordings deleted after.
 
 The bench commands run the test build (`--features bench`); on macOS start it as the app

@@ -130,3 +130,12 @@ recording), so the thresholds were moved for the measurement instead of filling 
   keeps "30 fps". Windows and Linux stay at 30 until friends' numbers exist; the friends'
   checklist gets a 60 fps item (step 10), and 60 fps is offered per system only where it
   measures ≥ 99 % there.
+
+## Other systems
+
+**Informal OK from friends on systems not named yet (2026-10-28):** they tried the test version informally
+and said it works; there are no results files and no numbers. For v0.1.0-alpha this replaces
+measured results from other systems (the user's decision): the release notes
+list what is only informally tested (`docs/release-notes/v0.1.0-alpha.md`). The M5 items 10–15
+of `docs/manual-checklist.md` (60 fps, Rec's windows kept out, countdown, control, menu bar /
+tray, bubble, disk space) are measured only on the dev Mac (above).
