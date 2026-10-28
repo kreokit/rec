@@ -1161,17 +1161,73 @@ async fn start_recording(
         control_close(&app);
         bubble_close(&app);
         own_windows(&app, false);
-    } else if control {
-        main_window_aside(&app);
-    } else {
+        return started;
+    }
+    shortcut_on(&app);
+    if !control {
         // The floating control would be recorded: the menu bar or tray instead (on Linux
         // only the taskbar: the main window steps aside there too).
         if let Err(e) = tray_open(&app) {
             eprintln!("tray: {e}");
         }
-        main_window_aside(&app);
     }
+    main_window_aside(&app);
     started
+}
+
+/// The stop shortcut (docs/m5-plan.md, choice 3): ⌥⇧⌘S on macOS, Ctrl+Alt+Shift+S
+/// elsewhere (⌥⌘S is "Save All" in VS Code and other apps people record). Registered only
+/// while recording. macOS registers it with `RegisterEventHotKey` (global-hotkey crate): no
+/// Accessibility or Input Monitoring permission.
+fn stop_shortcut() -> tauri_plugin_global_shortcut::Shortcut {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+    let keys = if cfg!(target_os = "macos") {
+        Modifiers::ALT | Modifiers::SHIFT | Modifiers::SUPER
+    } else {
+        Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT
+    };
+    Shortcut::new(Some(keys), Code::KeyS)
+}
+
+/// The stop shortcut as the screens show it; `None` where global shortcuts don't work
+/// (Linux on Wayland: an X11 key grab doesn't see other apps' keys there).
+fn stop_shortcut_label() -> Option<&'static str> {
+    if cfg!(target_os = "macos") {
+        Some("⌥⇧⌘S")
+    } else if cfg!(target_os = "linux")
+        && std::env::var("XDG_SESSION_TYPE").is_ok_and(|t| t.eq_ignore_ascii_case("wayland"))
+    {
+        None
+    } else {
+        Some("Ctrl+Alt+Shift+S")
+    }
+}
+
+/// While recording: the stop shortcut works everywhere. When another app already uses it,
+/// the main window says so (recording goes on; Stop is on the controls).
+fn shortcut_on(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let Some(label) = stop_shortcut_label() else {
+        return;
+    };
+    if app.global_shortcut().register(stop_shortcut()).is_err() {
+        let _ = app.emit_to(
+            "main",
+            "shortcut-unavailable",
+            format!("{label} is used by another app, so it can't stop this recording. Stop with the recording controls instead."),
+        );
+    }
+}
+
+fn shortcut_off(app: &AppHandle) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+    let _ = app.global_shortcut().unregister(stop_shortcut());
+}
+
+/// For the screens: the stop shortcut, or null where it doesn't work.
+#[tauri::command]
+fn stop_shortcut_text() -> Option<&'static str> {
+    stop_shortcut_label()
 }
 
 /// The bubble's pictures: wide enough for the Large bubble on a 2x display.
@@ -1209,6 +1265,7 @@ async fn countdown_cancel(app: AppHandle) -> Result<(), String> {
         }
     })
     .await;
+    shortcut_off(&app);
     control_close(&app);
     bubble_close(&app);
     tray_close();
@@ -1243,6 +1300,7 @@ async fn stop_recording(app: AppHandle) -> Result<Session, String> {
         }
     })
     .await;
+    shortcut_off(&app);
     control_close(&app);
     bubble_close(&app);
     tray_close();
@@ -1688,6 +1746,26 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if event.state == ShortcutState::Pressed && *shortcut == stop_shortcut() {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            let counting = recordings(&app)
+                                .live()
+                                .is_some_and(|l| l.session.state == sessions::State::Countdown);
+                            if counting {
+                                let _ = countdown_cancel(app).await;
+                            } else {
+                                let _ = stop_recording(app).await;
+                            }
+                        });
+                    }
+                })
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![
             permissions,
             request_mic,
@@ -1711,6 +1789,7 @@ pub fn run() {
             countdown_done,
             countdown_cancel,
             floating_move,
+            stop_shortcut_text,
             bubble_resize,
             bubble_hide,
             countdown_pref,

@@ -41,6 +41,12 @@ export function Recording({
     return () => void stop.then((f) => f());
   }, [onCancelled]);
 
+  // The stop shortcut is taken by another app: say so (the recording goes on).
+  useEffect(() => {
+    const stop = listen<string>("shortcut-unavailable", (e) => toast(e.payload, "info"));
+    return () => void stop.then((f) => f());
+  }, []);
+
   // Stopped from the floating control.
   useEffect(() => {
     const stop = listen<Session>("recording-stopped", (e) => {

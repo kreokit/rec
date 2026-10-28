@@ -97,3 +97,13 @@ recording), so the thresholds were moved for the measurement instead of filling 
   the red space note, the recording stopped by itself, Finish opened, check clean.
 - Warnings by minutes left at the recording's size per minute: a note at 10 min, red at 2
   (recording screen, floating control, menu bar); Home warns under 30 min of room.
+
+## Step 9: the stop shortcut
+
+- `tauri-plugin-global-shortcut` 2.4.1 and `global-hotkey` 0.8.0: MIT OR Apache-2.0. On macOS
+  it registers with Carbon's `RegisterEventHotKey` (an event tap only for media keys), so
+  **no Accessibility or Input Monitoring permission**: checked in the check copy, no prompt.
+- ⌥⇧⌘S (Ctrl+Alt+Shift+S elsewhere) is registered only while recording. Pressed in the check
+  copy (synthetic sources), it stopped the recording, Finish opened, check clean.
+- Another app holding the keys: the recording goes on and the main window says so. Linux on
+  Wayland: not offered (Home says to stop with the recording controls).

@@ -37,6 +37,7 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 # EBU R128 loudness and true peak (port of libebur128), as in KreoKit Voice.
 ebur128 = "0.1.10"
+tauri-plugin-global-shortcut = "2"
 
 # Free disk space before and during recording (statvfs); already in the tree through other crates.
 [target.'cfg(unix)'.dependencies]

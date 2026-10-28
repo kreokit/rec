@@ -29,6 +29,10 @@ export function FloatingControl() {
   const paused = session?.state === "paused";
   const stuck = !!session?.error;
   const disk = diskNote(live?.minutes_left);
+  const [shortcut, setShortcut] = useState<string | null>(null);
+  useEffect(() => {
+    api.stopShortcut().then(setShortcut, () => {});
+  }, []);
 
   const run = (action: () => Promise<unknown>) => () =>
     void action().catch((e) => {
@@ -89,7 +93,7 @@ export function FloatingControl() {
             type="button"
             className="ui-icon-button ui-button-primary control-button"
             aria-label="Stop"
-            title="Stop"
+            title={shortcut ? `Stop (${shortcut})` : "Stop"}
             disabled={stopping || !session}
             onClick={stop}
           >

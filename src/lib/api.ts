@@ -350,6 +350,8 @@ export const api = {
   /** Esc during the countdown: nothing is kept ("recording-cancelled" goes to the main window). */
   countdownCancel: () => invoke<void>("countdown_cancel"),
   countdownPref: () => invoke<boolean>("countdown_pref"),
+  /** "⌥⇧⌘S" / "Ctrl+Alt+Shift+S", or null where a global shortcut can't work (Wayland). */
+  stopShortcut: () => invoke<string | null>("stop_shortcut_text"),
   /** Moves a floating window by (dx, dy) points (dragged by hand, lib/handDrag.ts). */
   floatingMove: (label: "control" | "bubble", dx: number, dy: number) =>
     invoke<void>("floating_move", { label, dx, dy }),

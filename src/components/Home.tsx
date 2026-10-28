@@ -88,6 +88,7 @@ export function Home({
   const [systemAudio, setSystemAudio] = useState(last.systemAudio);
   const [quality, setQuality] = useState(last.quality);
   const [countdown, setCountdown] = useState(true);
+  const [shortcut, setShortcut] = useState<string | null | undefined>(undefined);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [recent, setRecent] = useState<Session[] | null>(null);
   const [pending, setPending] = useState<Session[]>([]);
@@ -103,6 +104,7 @@ export function Home({
 
   useEffect(() => {
     api.countdownPref().then(setCountdown, () => {});
+    api.stopShortcut().then(setShortcut, () => setShortcut(null));
   }, []);
   const chooseCountdown = (on: boolean) => {
     setCountdown(on);
@@ -449,6 +451,13 @@ export function Home({
                         )})`
                       : "")}
               </p>
+              {shortcut !== undefined && (
+                <p className="setup-size">
+                  {shortcut
+                    ? `Stop any time with ${shortcut}, from any app.`
+                    : "The stop shortcut doesn't work on this desktop: stop with the recording controls."}
+                </p>
+              )}
               {estimate && estimate.free_bytes !== null && roomMinutes(estimate.free_bytes, estimate.bytes_per_minute) < DISK_HOME_MINUTES && (
                 <p className="setup-space-warning" role="status">
                   <TriangleAlert size={14} strokeWidth={ICON_STROKE} aria-hidden />
