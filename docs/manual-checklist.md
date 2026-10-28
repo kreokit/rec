@@ -57,6 +57,17 @@ stay manual (and are covered on CI by the simulated hour and the kill -9 tests).
 | 14 | Camera bubble | record with the camera on; drag the bubble; click it: S, M, L, Hide | it shows you (mirrored) while recording, follows the drag, changes size keeping its corner, Hide leaves the camera recording; place and size are kept for the next recording |
 | 15 | Disk space (only with a disk that is really getting full; never fill a disk for the test) | record with less than 30 min of room | Home warns; while recording a note at 10 min left and red at 2; the recording stops by itself before the disk is full and Finish opens with a note |
 
+## Done for v0.1.0-alpha (dev Mac, macOS 12, Intel)
+
+**Done (2026-10-28).** The user tested the release build of the draft (0659814, the Intel
+.dmg installed in /Applications) by hand: `--self-test` ok; recording with the floating
+control and the camera bubble; Stop; Finish (no crash, the bubble inside the preview and
+round); export with the bubble; a region and a window (items 4, 4b, 11, 12, 14 and the
+real-capture part of 3). The bench measurements of the other items on this Mac are in the
+milestones' results: items 1–3, 5 (`docs/m2-results.md`), 4b, 6, 7, 8
+(`docs/m3-results.md`), 10, 11, 12, 13, 15 (`docs/m5-results.md`). Item 9 doesn't apply
+on macOS 12. Other systems: informal OK only, as the release notes say.
+
 Results go into the milestone's results doc (e.g. `docs/m3-results.md`) with the date and
 the system.
 

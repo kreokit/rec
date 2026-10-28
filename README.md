@@ -8,7 +8,16 @@
 
 Part of [KreoKit](https://github.com/kreokit), free open-source creator tools.
 
-> **Status:** in development. Not ready to download yet.
+> **Status:** alpha. Download it from [Releases](https://github.com/kreokit/rec/releases) (macOS, Windows, Linux).
+
+## What it does
+
+- **Record** the whole screen, a region or a window, with your camera and microphone (and the computer's sound on macOS 13+, Windows and Linux), at 1080p or 720p, 30 fps. Every source is its own crash-safe track: a crash keeps everything up to the last second or two, and Rec offers to recover it.
+- **While recording:** a 3-2-1 countdown, a small floating control, your camera in a bubble, and a stop shortcut from any app (⌥⇧⌘S / Ctrl+Alt+Shift+S). Rec's own windows stay out of the video where the system allows it.
+- **Finish:** trim the ends, choose screen only, screen + camera bubble or camera only, clean up your voice (RNNoise) and set the loudness (−14 or −16 LUFS).
+- **Export** an MP4 (H.264 + AAC), checked after writing; nothing is overwritten without asking.
+
+Unsigned alpha, measured on one Mac so far: see the release notes for what is tested and how to open it the first time.
 
 ## Development
 
